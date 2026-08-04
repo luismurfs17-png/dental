@@ -81,13 +81,22 @@ export function BookAppointment() {
   }
 
   if (servicesRemote.loading || doctorsRemote.loading || profileRemote.loading) return <Loading label="Preparando la reserva" />
-  return <><PageHeader eyebrow="RESERVA EN LÍNEA" title="Un momento para tu sonrisa." description="Elige tratamiento, doctor y un horario realmente disponible." /><div className="booking-layout"><form className="booking-card" onSubmit={submit}>
+  return <><PageHeader eyebrow="RESERVA EN LÍNEA" title="Un momento para tu sonrisa." description="Elige tratamiento, doctor y un horario realmente disponible." /><div className="booking-layout"><form className="booking-card" onSubmit={submit} onKeyDown={(e) => { if (e.key === 'Escape') { e.preventDefault(); setForm({ ...form, servicio_id: '', doctor_id: '', fecha: '', inicio: '', notas: '' }); setError(''); } }}>
     <div className="form-step"><span>1</span><div><strong>¿Qué necesitas?</strong><small>Selecciona un tratamiento</small></div></div>
-    <div className="service-options">{services.map((service) => <label key={service.id} className={String(form.servicio_id) === String(service.id) ? 'selected' : ''}><input type="radio" value={service.id} onChange={(e) => setForm({ ...form, servicio_id: e.target.value, inicio: '' })} required /><span className="service-icon"><Icon name="tooth" /></span><span><strong>{service.nombre}</strong><small>{service.duracion_min} min · {formatMoney(service.precio_bs)}</small></span><i><Icon name="check" size={13} /></i></label>)}</div>
+    <div className="service-options" role="radiogroup" aria-label="Tratamientos disponibles">
+      {services.map((service) => (
+        <label key={service.id} className={String(form.servicio_id) === String(service.id) ? 'selected' : ''}>
+          <input type="radio" name="servicio" value={service.id} checked={String(form.servicio_id) === String(service.id)} onChange={(e) => setForm({ ...form, servicio_id: e.target.value, inicio: '' })} required />
+          <span className="service-icon"><Icon name="tooth" /></span>
+          <span><strong>{service.nombre}</strong><small>{service.duracion_min} min · {formatMoney(service.precio_bs)}</small></span>
+          <i><Icon name="check" size={13} /></i>
+        </label>
+      ))}
+    </div>
     <Field label="Doctor"><select value={form.doctor_id} onChange={(e) => setForm({ ...form, doctor_id: e.target.value, inicio: '' })} required><option value="">Selecciona un doctor</option>{doctors.map((doctor) => <option value={doctor.id} key={doctor.id}>{doctor.nombre}</option>)}</select></Field>
     <Field label="Fecha"><input type="date" min={localDateInput()} value={form.fecha} onChange={(e) => setForm({ ...form, fecha: e.target.value, inicio: '' })} required /></Field>
     {slotsLoading ? <div className="inline-loading">Buscando horarios…</div> : form.fecha && form.servicio_id && form.doctor_id && (slots.length ? <SlotPicker slots={slots} selected={form.inicio} durationMinutes={selectedService?.duracion_min} onSelect={(slot) => setForm({ ...form, inicio: slot.inicio, doctor_id: String(slot.doctor_id) })} /> : <p className="muted-box">No hay horarios para este día.</p>)}
-    <Field label="Nota (opcional)"><textarea rows="3" value={form.notas} onChange={(e) => setForm({ ...form, notas: e.target.value })} /></Field>{error && <div className="inline-error">{error}</div>}<button className="button button-coral button-wide" disabled={saving || !form.inicio}>{saving ? 'Confirmando…' : 'Confirmar mi cita'}</button>
+    <Field label="Nota (opcional)"><textarea rows="3" value={form.notas} onChange={(e) => setForm({ ...form, notas: e.target.value })} onKeyDown={(e) => { if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); if (form.inicio) submit(e); } }} placeholder="Ctrl+Enter para enviar" /></Field>{error && <div className="inline-error">{error}</div>}<button className="button button-coral button-wide" type="submit" disabled={saving || !form.inicio}>{saving ? 'Confirmando…' : 'Confirmar mi cita'}</button>
   </form></div></>
 }
 
