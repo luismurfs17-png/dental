@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import {
   api,
@@ -25,10 +25,12 @@ import { emailUrl, whatsappUrl } from "../../lib/contact.js";
 
 export function Agenda() {
   const { user } = useAuth();
+  const [viewMode, setViewMode] = useState('week');
   const [week, setWeek] = useState(() => mondayOf(new Date()));
-  const days = Array.from({ length: 7 }, (_, index) => addDays(week, index));
+  const days = Array.from({ length: viewMode === 'week' ? 7 : viewMode === 'biweek' ? 14 : 28 }, (_, index) => addDays(week, index));
+  const rangeEnd = viewMode === 'week' ? 7 : viewMode === 'biweek' ? 14 : 28;
   const { data, loading, error, reload } = useRemote(
-    `/citas?desde=${encodeURIComponent(week.toISOString())}&hasta=${encodeURIComponent(addDays(week, 7).toISOString())}`,
+    `/citas?desde=${encodeURIComponent(week.toISOString())}&hasta=${encodeURIComponent(addDays(week, rangeEnd).toISOString())}`,
   );
   const servicesRemote = useRemote("/servicios");
   const doctorsRemote = useRemote("/doctores");
@@ -36,6 +38,9 @@ export function Agenda() {
   const [selectedState, setSelected] = useState(null);
   const [editing, setEditing] = useState(null);
   const [creating, setCreating] = useState(null);
+  const [dragOverDay, setDragOverDay] = useState(null);
+  const [editSlots, setEditSlots] = useState([]);
+  const [editSlotsLoading, setEditSlotsLoading] = useState(false);
   const selected = editing ? null : selectedState;
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState("");
@@ -43,6 +48,17 @@ export function Agenda() {
   const services = unwrap(servicesRemote.data, "servicios");
   const doctors = unwrap(doctorsRemote.data, "doctores");
   const patients = unwrap(patientsRemote.data, "pacientes");
+  const editDate = editing ? String(editing.inicio_local || "").slice(0, 10) : "";
+  useEffect(() => {
+    if (!editing || !editDate || !editing.servicio_id || !editing.doctor_id) { setEditSlots([]); return; }
+    let active = true;
+    setEditSlotsLoading(true);
+    api(`/disponibilidad?fecha=${encodeURIComponent(editDate)}&servicio_id=${encodeURIComponent(editing.servicio_id)}&doctor_id=${encodeURIComponent(editing.doctor_id)}`)
+      .then((result) => { if (active) setEditSlots(Array.isArray(result?.horarios) ? result.horarios : []); })
+      .catch(() => { if (active) setEditSlots([]); })
+      .finally(() => { if (active) setEditSlotsLoading(false); });
+    return () => { active = false; };
+  }, [editing, editDate]);
   function openCreate(start = defaultAppointmentStart(week)) {
     setCreating({
       paciente_id: "",
@@ -124,6 +140,32 @@ export function Agenda() {
       setBusy(false);
     }
   }
+  async function dropAppointment(event, day) {
+    event.preventDefault();
+    setDragOverDay(null);
+    const appointmentId = Number(event.dataTransfer.getData("text/plain"));
+    const appointment = appointments.find((item) => item.id === appointmentId);
+    if (!appointment) return;
+    const rect = event.currentTarget.getBoundingClientRect();
+    const offset = event.clientY - rect.top;
+    const minutes = Math.min(690, Math.max(0, Math.round(offset / 30) * 30));
+    const start = new Date(day);
+    start.setHours(8, minutes, 0, 0);
+    if (sameDay(new Date(appointment.inicio), day) && formatTime(appointment.inicio) === formatTime(start.toISOString())) return;
+    setBusy(true);
+    try {
+      await api(`/citas/${appointmentId}`, {
+        method: "PATCH",
+        body: { inicio: start.toISOString() },
+      });
+      setMessage("Cita reprogramada.");
+      reload();
+    } catch (requestError) {
+      setMessage(requestError.message);
+    } finally {
+      setBusy(false);
+    }
+  }
   async function archiveAppointment() {
     if (!window.confirm("¿Archivar esta cita? Permanecerá en auditoría."))
       return;
@@ -145,12 +187,22 @@ export function Agenda() {
         description={`${appointments.length} citas del ${formatDate(days[0], { short: true })} al ${formatDate(days[6])}.`}
         action={<button className="button button-coral" onClick={() => openCreate()}><Icon name="plus" /> Nueva visita</button>}
       />
-      <section className="agenda-toolbar" aria-label="Navegación semanal">
+      <section className="agenda-toolbar" aria-label="Navegación de agenda">
+        <select
+          className="button button-small button-ghost"
+          value={viewMode}
+          onChange={(e) => setViewMode(e.target.value)}
+          aria-label="Modo de vista"
+        >
+          <option value="week">Semana</option>
+          <option value="biweek">2 semanas</option>
+          <option value="month">Mes</option>
+        </select>
         <button
           className="icon-button"
-          onClick={() => setWeek(addDays(week, -7))}
-          aria-label="Semana anterior"
-          title="Semana anterior"
+          onClick={() => setWeek(addDays(week, -rangeEnd))}
+          aria-label="Período anterior"
+          title="Período anterior"
         >
           <Icon name="chevronLeft" />
         </button>
@@ -158,18 +210,18 @@ export function Agenda() {
           className={`button button-small ${currentWeek ? "button-primary" : "button-ghost"}`}
           onClick={() => setWeek(mondayOf(new Date()))}
         >
-          Esta semana
+          Hoy
         </button>
         <button
           className="icon-button"
-          onClick={() => setWeek(addDays(week, 7))}
-          aria-label="Semana siguiente"
-          title="Semana siguiente"
+          onClick={() => setWeek(addDays(week, rangeEnd))}
+          aria-label="Período siguiente"
+          title="Período siguiente"
         >
           <Icon name="chevronRight" />
         </button>
         <span>
-          {formatDate(days[0])} - {formatDate(days[6])}
+          {formatDate(days[0])} - {formatDate(days[days.length - 1])}
         </span>
       </section>
       <section className="metrics-grid agenda-metrics">
@@ -204,9 +256,9 @@ export function Agenda() {
         <div
           className="weekly-calendar-scroll"
           tabIndex="0"
-          aria-label="Calendario semanal, desplácese horizontalmente"
+          aria-label="Calendario de agenda, desplácese horizontalmente"
         >
-          <div className="weekly-calendar">
+          <div className="weekly-calendar" style={{ gridTemplateColumns: `65px repeat(${days.length}, minmax(${days.length > 7 ? 96 : 125}px, 1fr))` }}>
             <div className="calendar-corner">HORA</div>
             {days.map((day) => (
               <div
@@ -227,17 +279,27 @@ export function Agenda() {
               ))}
             </div>
             {days.map((day) => (
-              <div className="calendar-day-column" key={day.toISOString()} onClick={(event) => openCreateAt(day, event)} title="Haz clic en un horario vacío para añadir una visita">
+              <div
+                className={`calendar-day-column ${dragOverDay && sameDay(dragOverDay, day) ? "drop-target" : ""}`}
+                key={day.toISOString()}
+                onClick={(event) => openCreateAt(day, event)}
+                onDragOver={(event) => { event.preventDefault(); setDragOverDay(day); }}
+                onDragLeave={() => setDragOverDay(null)}
+                onDrop={(event) => dropAppointment(event, day)}
+                title="Haz clic en un horario vacío o arrastra una cita aquí"
+              >
                 {appointments
                   .filter((item) => sameDay(new Date(item.inicio), day))
                   .map((item, index) => (
                     <button
                       key={item.id}
+                      draggable
+                      onDragStart={(event) => { event.stopPropagation(); event.dataTransfer.setData("text/plain", String(item.id)); event.dataTransfer.effectAllowed = "move"; }}
                       className={`calendar-appointment state-${item.estado} tone-${index % 4}`}
                       style={appointmentPosition(item)}
                       onClick={(event) => { event.stopPropagation(); setSelected(item); }}
-                      aria-label={`${formatTime(item.inicio)} a ${formatTime(item.fin)}, ${item.nombres} ${item.apellidos}, ${item.servicio}`}
-                      title="Abrir acciones de la cita"
+                      aria-label={`${formatTime(item.inicio)} a ${formatTime(item.fin)}, ${item.nombres} ${item.apellidos}, ${item.servicio}. Arrastra para reprogramar`}
+                      title="Clic para acciones, arrastra para reprogramar"
                     >
                       <time>{formatTime(item.inicio)} - {formatTime(item.fin)}</time>
                       <strong>
@@ -353,6 +415,31 @@ export function Agenda() {
                 required
               />
             </Field>
+            <div className="availability-panel">
+              <div className="availability-head">
+                <strong>Disponibilidad del doctor</strong>
+                <span className="slot-legend"><span><i className="available" /> Libre</span><span><i className="occupied" /> Ocupado</span></span>
+              </div>
+              {editSlotsLoading ? (
+                <div className="inline-loading">Buscando horarios…</div>
+              ) : editSlots.length ? (
+                <div className="time-slots">
+                  {editSlots.map((slot) => {
+                    const occupied = slot.estado === "ocupado";
+                    const current = new Date(slot.inicio).toISOString() === new Date(editing.inicio_local).toISOString();
+                    return (
+                      <label key={slot.inicio} className={`${occupied ? "occupied" : ""} ${current ? "selected" : ""}`}>
+                        <input type="radio" name="edit-slot" disabled={occupied} checked={current} onChange={() => setEditing({ ...editing, inicio_local: toLocalInput(slot.inicio) })} />
+                        <strong>{formatTime(slot.inicio)}</strong>
+                        {occupied && <small>Ocupado</small>}
+                      </label>
+                    );
+                  })}
+                </div>
+              ) : (
+                <p className="muted-box">Sin horarios para este día. Ajusta la fecha o el doctor.</p>
+              )}
+            </div>
             <Field label="Servicio">
               <select
                 value={editing.servicio_id}
