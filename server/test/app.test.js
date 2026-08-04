@@ -306,3 +306,22 @@ test('auditoría filtra con alcance de consultorio y enriquece pacientes archiva
   await patient.post('/api/auth/desarrollo').send({ email: 'integration-patient@test.local' }).expect(200);
   await patient.get('/api/auditoria').expect(403);
 });
+
+test('el doctor puede eliminar y recrear el mismo horario sin conflicto', async () => {
+  const doctor = request.agent(app);
+  await doctor.post('/api/auth/desarrollo').send({ email: 'integration-doctor@test.local' }).expect(200);
+  const date = new Date(Date.now() + 14 * 86400000).toISOString().slice(0, 10);
+  const weekday = new Date(`${date}T12:00:00Z`).getUTCDay();
+  const schedule = db.prepare(`SELECT id FROM horarios WHERE consultorio_id=? AND usuario_id=? AND dia_semana=? AND eliminado_en IS NULL`)
+    .get(fixture.clinicId, fixture.doctorId, weekday);
+  if (schedule) await doctor.delete(`/api/horarios/${schedule.id}`).expect(200);
+  await doctor.post('/api/horarios').send({ dia_semana: weekday, hora_inicio: '09:00', hora_fin: '10:00' }).expect(201);
+  const first = db.prepare(`SELECT id FROM horarios WHERE consultorio_id=? AND usuario_id=? AND dia_semana=? AND eliminado_en IS NULL`)
+    .get(fixture.clinicId, fixture.doctorId, weekday);
+  await doctor.delete(`/api/horarios/${first.id}`).expect(200);
+  const recreated = await doctor.post('/api/horarios').send({ dia_semana: weekday, hora_inicio: '09:00', hora_fin: '10:00' }).expect(201);
+  assert.ok(recreated.body.id);
+  const rows = db.prepare(`SELECT COUNT(*) total FROM horarios WHERE consultorio_id=? AND usuario_id=? AND dia_semana=? AND hora_inicio='09:00' AND eliminado_en IS NULL`)
+    .get(fixture.clinicId, fixture.doctorId, weekday);
+  assert.equal(rows.total, 1);
+});

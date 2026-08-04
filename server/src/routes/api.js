@@ -403,6 +403,8 @@ router.post('/horarios', allowRoles('doctor'), (req, res) => {
     .get(doctorId, tenant(req));
   if (!doctor) throw new ApiError(404, 'Doctor no encontrado');
   if (req.body.hora_inicio >= req.body.hora_fin) throw new ApiError(400, 'La hora final debe ser posterior a la inicial');
+  db.prepare(`DELETE FROM horarios WHERE eliminado_en IS NOT NULL AND consultorio_id=? AND usuario_id=?`)
+    .run(tenant(req), doctorId);
   try {
     const result = db.prepare(`INSERT INTO horarios (consultorio_id,usuario_id,dia_semana,hora_inicio,hora_fin)
       VALUES (?,?,?,?,?)`).run(tenant(req), doctorId, Number(req.body.dia_semana), req.body.hora_inicio, req.body.hora_fin);
@@ -415,11 +417,11 @@ router.post('/horarios', allowRoles('doctor'), (req, res) => {
 });
 router.delete('/horarios/:id', allowRoles('doctor'), (req, res) => {
   const scheduleId = id(req.params.id);
-  const result = db.prepare(`UPDATE horarios SET eliminado_en=CURRENT_TIMESTAMP,activo=0,actualizado_en=CURRENT_TIMESTAMP
+  const result = db.prepare(`DELETE FROM horarios
     WHERE id=? AND consultorio_id=? AND eliminado_en IS NULL`).run(scheduleId, tenant(req));
   ensureFound(result, 'Horario no encontrado');
-  log(req, 'eliminar_logico', 'horario', scheduleId);
-  res.json({ mensaje: 'Horario archivado correctamente' });
+  log(req, 'eliminar', 'horario', scheduleId);
+  res.json({ mensaje: 'Horario eliminado correctamente' });
 });
 
 router.get('/citas', (req, res) => {
