@@ -7,7 +7,7 @@ import { authenticate, allowRoles, requireTenant } from '../auth.js';
 import { config } from '../config.js';
 import { audit, db } from '../db.js';
 import { sendAppointmentEmail } from '../email.js';
-import { ApiError, asyncRoute, positiveNumber, required } from '../http.js';
+import { ApiError, positiveNumber, required } from '../http.js';
 
 const router = Router();
 router.use(authenticate);
