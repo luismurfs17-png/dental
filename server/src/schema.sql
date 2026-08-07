@@ -191,6 +191,17 @@ CREATE TABLE IF NOT EXISTS email_recordatorios (
   UNIQUE(consultorio_id, cita_id, destinatario)
 );
 
+CREATE TABLE IF NOT EXISTS admin_auditoria (
+  id INTEGER PRIMARY KEY,
+  usuario_id INTEGER REFERENCES usuarios(id),
+  accion TEXT NOT NULL,
+  entidad_tipo TEXT NOT NULL,
+  entidad_id INTEGER,
+  datos_json TEXT,
+  ip TEXT,
+  creado_en TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
 CREATE INDEX IF NOT EXISTS idx_usuarios_consultorio ON usuarios(consultorio_id, eliminado_en);
 CREATE INDEX IF NOT EXISTS idx_pacientes_consultorio ON pacientes(consultorio_id, eliminado_en);
 CREATE INDEX IF NOT EXISTS idx_citas_agenda ON citas(consultorio_id, doctor_id, inicio, eliminado_en);

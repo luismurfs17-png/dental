@@ -21,6 +21,17 @@ No tiene landing page. La aplicación abre directamente en el acceso o en el por
 
 ## Roles y permisos
 
+### Superadministrador
+
+- Se define por correo en la variable `SUPERADMIN_EMAILS` (separados por coma); no se guarda como rol en la base de datos.
+- Conserva su cuenta y consultorio propios si ya los tiene; la bandera `es_admin` solo añade el panel extra.
+- Ve el panel `Administrar` (`/admin` y `GET/POST /api/admin/*`): métricas, consultorios, usuarios e invitaciones.
+- Invita correos (`POST /api/admin/invitaciones`); el invitado queda `preautorizado` y al iniciar con Google se activa y puede crear su consultorio.
+- Cambia estado (`activo`/`suspendido`/`pendiente`/`preautorizado`) o elimina usuarios; suspendidos y eliminados pierden el acceso.
+- Puede eliminar un consultorio completo (borrado lógico del consultorio y de sus usuarios).
+- Sus acciones quedan en la tabla `admin_auditoria`.
+- No puede suspenderse ni eliminarse a sí mismo.
+
 ### Doctor
 
 - Control de su agenda y citas.
@@ -52,6 +63,7 @@ No tiene landing page. La aplicación abre directamente en el acceso o en el por
 
 ## Reglas importantes
 
+- Solo los correos invitados por el superadministrador pueden crear un consultorio; quien se auto-registra queda `pendiente` y sin acceso hasta recibir invitación.
 - El código del paciente es obligatorio, solo numérico, máximo 32 dígitos y único por consultorio.
 - Se almacena como texto para conservar ceros iniciales.
 - La búsqueda prioriza código exacto, luego prefijo y después coincidencias parciales.
@@ -102,6 +114,7 @@ REMINDER_HOURS=24
 ## Archivos clave
 
 - `server/src/routes/api.js`: rutas, permisos y reglas principales.
+- `server/src/routes/admin.js`: panel del superadministrador (invitaciones, consultorios, usuarios).
 - `server/src/routes/auth.js`: Google OAuth y acceso de desarrollo.
 - `server/src/schema.sql`: esquema SQLite.
 - `server/src/db.js`: apertura, migraciones incrementales y auditoría.
@@ -110,6 +123,7 @@ REMINDER_HOURS=24
 - `server/src/seed.js`: datos ficticios.
 - `server/test/app.test.js`: pruebas de integración.
 - `client/src/App.jsx`: rutas y permisos frontend.
+- `client/src/pages/admin/AdminPanel.jsx`: centro de control del superadministrador.
 - `client/src/components/AppShell.jsx`: navegación por rol.
 - `client/src/pages/team/TeamPages.jsx`: agenda, pacientes, servicios, caja y avisos.
 - `client/src/pages/team/Audit.jsx`: pantalla de Auditoría.
@@ -172,17 +186,51 @@ Estado verificado:
 - Docker no está instalado en esta máquina; la imagen no se ha probado localmente.
 - El cliente conserva un aviso de React Router relacionado con RSC. SONRIDENT es una SPA y no usa RSC. No ejecutar `npm audit fix --force`.
 
-## Despliegue pendiente
+## Estado del despliegue
 
-- Repositorio GitHub: `https://github.com/luismurfs17-png/dental`.
-- Falta confirmar dominio y acceso a Dokploy.
-- En Dokploy usar Dockerfile raíz, contexto `.`, puerto interno `3000` y una réplica.
-- Crear volumen `sonrident_data` montado en `/app/data` antes de introducir datos reales.
-- No subir `.env`, SQLite, QR, evidencias, `node_modules` ni el ZIP de Magic UI.
-- Configurar Google OAuth con `https://DOMINIO/api/auth/google/callback`.
-- Configurar backup externo diario y probar restauración.
-- Verificar reserva, reprogramación, Gmail, pagos, auditoría y persistencia después del primer despliegue.
+- Repositorio privado: `https://github.com/luismurfs17-png/dental`.
+- Producción: `https://sonrident.copaapp.cloud`.
+- Commit desplegado: `f568d6109cacf2a57ba0bcd52ba87372ddfeda9f`.
+- Dokploy usa Dockerfile raíz, contexto `.`, puerto interno `3000` y una réplica.
+- El volumen `sonrident_data` está montado en `/app/data`.
+- La SPA, HTTPS y `GET /api/health` están verificados.
+- Google OAuth y Gmail SMTP siguen pendientes; el acceso normal todavía no funciona.
+- También faltan la prueba de persistencia tras redespliegue, backup externo,
+  restauración y validación funcional completa.
+- El proceso detallado y los pasos exactos para continuar están en
+  `DEPLOYMENT_RUNBOOK.md`, sección "Estado del despliegue del 4 de agosto de 2026".
 
 ## Criterio para continuar
 
 Antes de modificar una regla sensible, revisar permisos multi-tenant y añadir una prueba de integración. Después de cambios ejecutar siempre `npm test` en `server` y `npm run build` en `client`.
+
+## Módulos 1 y 2 completados (agosto 2026)
+
+### Módulo 1: Backup y exportación
+
+- **Backup local**: `server/src/backup.js` genera snapshots WAL-safe con `db.backup()` + copia de `uploads/` en `data/backups/`.
+- Variables: `BACKUP_ENABLED`, `BACKUP_CRON`, `BACKUP_RETENTION_LOCAL`.
+- Integrado en `server/src/index.js` junto a reminders.
+- **Exportación ZIP**: `GET /api/admin/consultorios/:id/exportar` genera ZIP con JSON, HTML y evidencias.
+
+### Módulo 2: Panel superadmin enriquecido
+
+- **Listado enriquecido**: `GET /api/admin/consultorios` ahora incluye `estado_actividad`, `ingresos_total`, `ultima_actividad`.
+- **Detalle**: `GET /api/admin/consultorios/:id` con próximas citas, últimos pagos, evidencias.
+- **Auditoría**: `GET /api/admin/auditoria` con filtros por fecha y acción.
+- **Reinicio**: `POST /api/admin/consultorios/:id/reiniciar` vacía pacientes/citas/pagos conservando usuarios y configuración. Snapshot previo de seguridad.
+- **Panel UI**: `client/src/pages/admin/AdminPanel.jsx` con badges de actividad, botones de detalle, exportar, reiniciar.
+
+### Archivos nuevos
+
+- `server/src/backup.js`: módulo de backups.
+- `server/src/routes/admin.js`: rutas del panel superadmin enriquecido.
+- `client/src/pages/admin/AdminPanel.jsx`: UI del panel.
+- `SUPERADMIN_CONTEXT.md`: contexto detallado del rol superadmin.
+
+### Próximos pasos
+
+1. **Producción**: Configurar `SUPERADMIN_EMAILS`, Google OAuth y backup externo en Dokploy.
+2. **Tests**: Los tests automatizados tienen un problema con NODE_ENV en ESM que requiere solución (loader personalizado o reestructuración de imports).
+3. **Módulos siguientes**: WhatsApp, presupuestos con abonos, odontograma, control de caja, reportes, consentimiento informado, link público de agendamiento.
+4. **Infraestructura**: Rate limiting, 2FA, política de privacidad.

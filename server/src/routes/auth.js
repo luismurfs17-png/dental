@@ -3,7 +3,7 @@ import { randomBytes, timingSafeEqual } from 'node:crypto';
 import { OAuth2Client } from 'google-auth-library';
 import { config } from '../config.js';
 import { db } from '../db.js';
-import { authenticate, clearSession, issueSession } from '../auth.js';
+import { authenticate, clearSession, issueSession, withAdminFlag } from '../auth.js';
 import { ApiError, asyncRoute, required } from '../http.js';
 
 const router = Router();
@@ -19,9 +19,10 @@ function findOrCreateGoogleUser(profile) {
   }
   if (user?.estado === 'suspendido') throw new ApiError(403, 'El usuario está suspendido');
   if (user) {
-    db.prepare(`UPDATE usuarios SET google_sub = ?, nombre = ?, avatar_url = ?, estado = 'activo',
+    const estado = user.estado === 'pendiente' ? 'pendiente' : 'activo';
+    db.prepare(`UPDATE usuarios SET google_sub = ?, nombre = ?, avatar_url = ?, estado = ?,
       ultimo_acceso_en = CURRENT_TIMESTAMP, actualizado_en = CURRENT_TIMESTAMP WHERE id = ?`)
-      .run(profile.sub, profile.name || user.nombre, profile.picture || user.avatar_url, user.id);
+      .run(profile.sub, profile.name || user.nombre, profile.picture || user.avatar_url, estado, user.id);
   } else {
     const result = db.prepare(`INSERT INTO usuarios
       (email, nombre, avatar_url, google_sub, rol, estado, ultimo_acceso_en)
@@ -29,8 +30,8 @@ function findOrCreateGoogleUser(profile) {
       .run(profile.email, profile.name || profile.email, profile.picture || null, profile.sub);
     user = db.prepare('SELECT * FROM usuarios WHERE id = ?').get(result.lastInsertRowid);
   }
-  return db.prepare(`SELECT id, consultorio_id, email, nombre, avatar_url, rol, estado
-    FROM usuarios WHERE id = ?`).get(user.id);
+  return withAdminFlag(db.prepare(`SELECT id, consultorio_id, email, nombre, avatar_url, rol, estado
+    FROM usuarios WHERE id = ?`).get(user.id));
 }
 
 router.get('/google', (_req, res, next) => {
@@ -74,7 +75,7 @@ router.post('/desarrollo', (req, res, next) => {
       FROM usuarios WHERE email = ? COLLATE NOCASE AND eliminado_en IS NULL LIMIT 1`).get(email);
     if (!user || user.estado !== 'activo') throw new ApiError(404, 'Usuario de desarrollo no encontrado; ejecute la semilla');
     issueSession(res, user);
-    res.json({ mensaje: 'Sesión de desarrollo iniciada', usuario: user });
+    res.json({ mensaje: 'Sesión de desarrollo iniciada', usuario: withAdminFlag(user) });
   } catch (error) { next(error); }
 });
 

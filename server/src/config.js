@@ -26,6 +26,16 @@ export const config = {
     from: process.env.SMTP_FROM || 'SONRIDENT <no-reply@example.com>',
     cron: process.env.REMINDER_CRON || '0 * * * *',
     hours: Number(process.env.REMINDER_HOURS || 24)
+  },
+  get adminEmails() {
+    return (process.env.SUPERADMIN_EMAILS || '')
+      .split(',').map((email) => email.trim().toLowerCase()).filter(Boolean);
+  },
+  backup: {
+    enabled: process.env.BACKUP_ENABLED === 'true',
+    cron: process.env.BACKUP_CRON || '0 3 * * *',
+    retention: Math.max(1, Number(process.env.BACKUP_RETENTION_LOCAL || 3)),
+    dirName: 'backups'
   }
 };
 

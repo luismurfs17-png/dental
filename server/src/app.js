@@ -7,6 +7,7 @@ import helmet from 'helmet';
 import multer from 'multer';
 import { config } from './config.js';
 import authRoutes from './routes/auth.js';
+import adminRoutes from './routes/admin.js';
 import apiRoutes from './routes/api.js';
 
 export const app = express();
@@ -21,6 +22,7 @@ app.use(cookieParser());
 
 app.get('/api/health', (_req, res) => res.json({ estado: 'saludable', base_de_datos: 'sqlite' }));
 app.use('/api/auth', authRoutes);
+app.use('/api/admin', adminRoutes);
 app.use('/api', apiRoutes);
 
 const publicDir = path.resolve(import.meta.dirname, '../public');

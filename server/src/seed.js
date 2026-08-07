@@ -13,6 +13,11 @@ const seed = db.transaction(() => {
   addUser.run(clinic.id, 'doctora@sonrisas.test', 'Dra. Valeria Flores', 'doctor');
   addUser.run(clinic.id, 'recepcion@sonrisas.test', 'María Quispe', 'operativo');
   addUser.run(clinic.id, 'paciente@sonrisas.test', 'Carlos Mendoza', 'paciente');
+  if (process.env.SUPERADMIN_EMAILS) {
+    for (const adminEmail of process.env.SUPERADMIN_EMAILS.split(',').map((email) => email.trim()).filter(Boolean)) {
+      addUser.run(clinic.id, adminEmail, `Superadministrador (${adminEmail})`, 'doctor');
+    }
+  }
   const doctor = db.prepare(`SELECT id FROM usuarios WHERE consultorio_id=? AND email='doctora@sonrisas.test'`).get(clinic.id);
   const operator = db.prepare(`SELECT id FROM usuarios WHERE consultorio_id=? AND email='recepcion@sonrisas.test'`).get(clinic.id);
   const patientUser = db.prepare(`SELECT id FROM usuarios WHERE consultorio_id=? AND email='paciente@sonrisas.test'`).get(clinic.id);
@@ -56,4 +61,6 @@ const seed = db.transaction(() => {
 
 const clinicId = seed();
 console.log(`Semilla ficticia creada para el consultorio ${clinicId}`);
-console.log('Acceso de desarrollo: doctora@sonrisas.test, recepcion@sonrisas.test o paciente@sonrisas.test');
+const admins = (process.env.SUPERADMIN_EMAILS || '').split(',').map((email) => email.trim()).filter(Boolean);
+const devHints = ['doctora@sonrisas.test', 'recepcion@sonrisas.test', 'paciente@sonrisas.test', ...admins];
+console.log(`Acceso de desarrollo: ${devHints.join(', ')}`);

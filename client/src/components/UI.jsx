@@ -48,7 +48,7 @@ export function StatusPill({ status = '' }) {
     completado: 'Completado', pagado: 'Pagado', verificado: 'Verificado',
     rechazada: 'Rechazada', rechazado: 'Rechazado', activo: 'Activo', vencido: 'Vencido',
     atendida: 'Atendida', no_asistio: 'No asistió', por_verificar: 'Por verificar',
-    valido: 'Válido', anulado: 'Anulado',
+    valido: 'Válido', anulado: 'Anulado', preautorizado: 'Invitado', suspendido: 'Suspendido',
   }
   return <span className={`status status-${normalized}`}>{labels[normalized] || status || 'Pendiente'}</span>
 }

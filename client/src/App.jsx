@@ -7,6 +7,7 @@ import { ErrorState, Loading } from './components/UI.jsx'
 import Icon from './components/Icon.jsx'
 import Login, { homeFor } from './pages/Login.jsx'
 import Onboarding from './pages/Onboarding.jsx'
+import AdminPanel from './pages/admin/AdminPanel.jsx'
 import { BookAppointment, PatientAppointments, PatientDashboard, PatientHealth, PatientPayments } from './pages/patient/PatientPages.jsx'
 import { Agenda, Notifications, Patients, PaymentsDesk, Services } from './pages/team/TeamPages.jsx'
 import PatientDetail from './pages/team/PatientDetail.jsx'
@@ -55,6 +56,7 @@ export default function App() {
           <Route path="/notificaciones" element={<RoleRoute allow={['doctor', 'operativo']}><Notifications /></RoleRoute>} />
           <Route path="/configuracion" element={<RoleRoute allow={['doctor']}><Settings /></RoleRoute>} />
           <Route path="/auditoria" element={<RoleRoute allow={['doctor']}><Audit /></RoleRoute>} />
+          <Route path="/admin" element={<AdminRoute><AdminPanel /></AdminRoute>} />
         </Route>
         <Route path="*" element={<Navigate to={user ? homeFor(user) : '/login'} replace />} />
       </Routes>
@@ -73,6 +75,11 @@ function RoleRoute({ allow, children }) {
   const { user } = ReactContextValue()
   const role = user?.rol || user?.role
   return allow.includes(role) ? children : <Navigate to={homeFor(user)} replace />
+}
+
+function AdminRoute({ children }) {
+  const { user } = ReactContextValue()
+  return user?.es_admin ? children : <Navigate to={homeFor(user)} replace />
 }
 
 function ReactContextValue() {

@@ -10,9 +10,10 @@
     "start": "node src/index.js",
     "dev": "node --watch src/index.js",
     "seed": "node src/seed.js",
-    "test": "node --test"
+    "test": "cross-env NODE_ENV=development node --test"
   },
   "dependencies": {
+    "archiver": "^7.0.1",
     "better-sqlite3": "^12.2.0",
     "cookie-parser": "^1.4.7",
     "cors": "^2.8.5",
@@ -26,6 +27,7 @@
     "nodemailer": "^9.0.3"
   },
   "devDependencies": {
+    "cross-env": "^10.1.0",
     "supertest": "^7.1.1"
   }
 }

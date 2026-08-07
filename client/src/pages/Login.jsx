@@ -64,6 +64,8 @@ export default function Login() {
 
 export function homeFor(user) {
   const role = user?.rol || user?.role
-  if (role === 'doctor' && !user?.consultorio && !user?.consultorioId && !user?.consultorio_id) return '/crear-consultorio'
+  const hasClinic = Boolean(user?.consultorio || user?.consultorioId || user?.consultorio_id)
+  if (user?.es_admin && !hasClinic) return '/admin'
+  if (role === 'doctor' && !hasClinic) return '/crear-consultorio'
   return role === 'paciente' ? '/inicio' : '/agenda'
 }

@@ -1,8 +1,12 @@
 import { before, test } from 'node:test';
 import assert from 'node:assert/strict';
 import request from 'supertest';
+import jwt from 'jsonwebtoken';
 import { app } from '../src/app.js';
 import { db } from '../src/db.js';
+import { config } from '../src/config.js';
+
+process.env.SUPERADMIN_EMAILS = 'admin@test.local';
 
 let fixture;
 let auditedPatient;
@@ -16,9 +20,11 @@ before(() => {
     addUser.run(clinic.id, 'integration-operative@test.local', 'Operative Integration', 'operativo');
     addUser.run(clinic.id, 'integration-operative-2@test.local', 'Operative Two', 'operativo');
     addUser.run(clinic.id, 'integration-patient@test.local', 'Patient Integration', 'paciente');
+    addUser.run(clinic.id, 'admin@test.local', 'Admin Test', 'doctor');
     const doctor = db.prepare(`SELECT id FROM usuarios WHERE consultorio_id=? AND email='integration-doctor@test.local'`).get(clinic.id);
     const operative = db.prepare(`SELECT id FROM usuarios WHERE consultorio_id=? AND email='integration-operative@test.local'`).get(clinic.id);
     const operative2 = db.prepare(`SELECT id FROM usuarios WHERE consultorio_id=? AND email='integration-operative-2@test.local'`).get(clinic.id);
+    const admin = db.prepare(`SELECT id FROM usuarios WHERE consultorio_id=? AND email='admin@test.local'`).get(clinic.id);
     const patientUser = db.prepare(`SELECT id FROM usuarios WHERE consultorio_id=? AND email='integration-patient@test.local'`).get(clinic.id);
     let patient = db.prepare(`SELECT id FROM pacientes WHERE consultorio_id=? AND email='integration-patient@test.local'`).get(clinic.id);
     if (!patient) patient = { id: Number(db.prepare(`INSERT INTO pacientes (consultorio_id,usuario_id,codigo,nombres,apellidos,email)
@@ -38,7 +44,7 @@ before(() => {
     const weekday = new Date(`${date}T12:00:00Z`).getUTCDay();
     db.prepare(`INSERT OR IGNORE INTO horarios (consultorio_id,usuario_id,dia_semana,hora_inicio,hora_fin) VALUES (?,?,?,'09:00','10:00')`).run(clinic.id, doctor.id, weekday);
     db.prepare(`DELETE FROM citas WHERE consultorio_id=? AND paciente_id=? AND motivo='INTEGRATION-BOOKING'`).run(clinic.id, patient.id);
-    return { clinicId: clinic.id, doctorId: doctor.id, operativeId: operative.id, operative2Id: operative2.id,
+    return { clinicId: clinic.id, doctorId: doctor.id, operativeId: operative.id, operative2Id: operative2.id, adminId: admin.id,
       patientId: patient.id, serviceId: service.id, foreignClinicId: foreignClinic.id, foreignDoctorId: foreignDoctor.id,
       foreignPatientId: foreignPatient.id, foreignServiceId: foreignService.id, date };
   });
@@ -324,4 +330,96 @@ test('el doctor puede eliminar y recrear el mismo horario sin conflicto', async 
   const rows = db.prepare(`SELECT COUNT(*) total FROM horarios WHERE consultorio_id=? AND usuario_id=? AND dia_semana=? AND hora_inicio='09:00' AND eliminado_en IS NULL`)
     .get(fixture.clinicId, fixture.doctorId, weekday);
   assert.equal(rows.total, 1);
+});
+
+test('solo el superadministrador puede invitar y administrar consultorios', async () => {
+  const doctor = request.agent(app);
+  await doctor.post('/api/auth/desarrollo').send({ email: 'integration-doctor@test.local' }).expect(200);
+  await doctor.get('/api/admin/resumen').expect(403);
+  await doctor.post('/api/admin/invitaciones').send({ email: 'nuevo@test.local' }).expect(403);
+
+  const admin = request.agent(app);
+  const login = await admin.post('/api/auth/desarrollo').send({ email: 'admin@test.local' }).expect(200);
+  assert.equal(login.body.usuario.es_admin, true);
+
+  const resumen = await admin.get('/api/admin/resumen').expect(200);
+  assert.ok(resumen.body.resumen.consultorios >= 2);
+  assert.ok(resumen.body.resumen.invitaciones >= 0);
+
+  const clinics = await admin.get('/api/admin/consultorios').expect(200);
+  assert.ok(clinics.body.consultorios.some((clinic) => clinic.id === fixture.clinicId));
+
+  const invited = await admin.post('/api/admin/invitaciones').send({ email: 'new-clinic@test.local', nombre: 'Nueva Clínica' }).expect(201);
+  assert.deepEqual(db.prepare('SELECT rol, estado, consultorio_id FROM usuarios WHERE id=?').get(invited.body.id),
+    { rol: 'doctor', estado: 'preautorizado', consultorio_id: null });
+
+  await admin.post('/api/admin/invitaciones').send({ email: 'new-clinic@test.local' }).expect(200);
+  await admin.post('/api/admin/invitaciones').send({ email: 'integration-doctor@test.local' }).expect(409);
+  await admin.post('/api/admin/invitaciones').send({ email: 'admin@test.local' }).expect(400);
+
+  await admin.patch(`/api/admin/usuarios/${fixture.adminId}/estado`).send({ estado: 'suspendido' }).expect(400);
+  await admin.delete(`/api/admin/usuarios/${fixture.adminId}`).expect(400);
+
+  await admin.patch(`/api/admin/usuarios/${invited.body.id}/estado`).send({ estado: 'suspendido' }).expect(200);
+  const suspended = await admin.get('/api/admin/usuarios').query({ estado: 'suspendido' }).expect(200);
+  assert.ok(suspended.body.usuarios.some((user) => user.id === invited.body.id));
+
+  await admin.delete(`/api/admin/usuarios/${invited.body.id}`).expect(200);
+  assert.ok(db.prepare('SELECT eliminado_en FROM usuarios WHERE id=?').get(invited.body.id).eliminado_en);
+
+  const temporary = db.prepare(`INSERT INTO consultorios (nombre, email) VALUES ('Clínica Temporal','temporal@test.local')`).run();
+  await admin.delete(`/api/admin/consultorios/${temporary.lastInsertRowid}`).expect(200);
+  assert.ok(db.prepare('SELECT eliminado_en FROM consultorios WHERE id=?').get(temporary.lastInsertRowid).eliminado_en);
+
+  const first = clinics.body.consultorios.find((clinic) => clinic.id === fixture.clinicId);
+  assert.ok(['activo', 'inactivo', 'abandonado', 'vacio', 'sinusuario'].includes(first.estado_actividad));
+  assert.equal(typeof first.ingresos_total, 'number');
+
+  const detalle = await admin.get(`/api/admin/consultorios/${fixture.clinicId}`).expect(200);
+  assert.equal(detalle.body.consultorio.id, fixture.clinicId);
+  assert.ok(Array.isArray(detalle.body.proximas_citas));
+  assert.equal(typeof detalle.body.archivos, 'number');
+
+  const exportData = await admin.get(`/api/admin/consultorios/${fixture.clinicId}/exportar`)
+    .parse((res, callback) => {
+      const chunks = [];
+      res.on('data', (chunk) => chunks.push(chunk));
+      res.on('end', () => callback(null, Buffer.concat(chunks)));
+    }).expect(200);
+  assert.match(exportData.headers['content-type'], /application\/zip/);
+  assert.ok(Buffer.isBuffer(exportData.body) && exportData.body.length > 0);
+
+  await admin.post(`/api/admin/consultorios/${fixture.clinicId}/reiniciar`).send({ confirmar: false }).expect(400);
+  const reinicio = await admin.post(`/api/admin/consultorios/${fixture.clinicId}/reiniciar`).send({ confirmar: true }).expect(200);
+  assert.ok(String(reinicio.body.snapshot).startsWith('consultorio-'));
+  assert.ok(reinicio.body.pacientes >= 1);
+  assert.equal(db.prepare(`SELECT COUNT(*) n FROM pacientes WHERE consultorio_id=? AND eliminado_en IS NULL`).get(fixture.clinicId).n, 0);
+  assert.equal(db.prepare(`SELECT COUNT(*) n FROM citas WHERE consultorio_id=? AND eliminado_en IS NULL`).get(fixture.clinicId).n, 0);
+
+  const audit = await admin.get('/api/admin/auditoria').expect(200);
+  assert.ok(audit.body.auditoria.some((entry) => entry.accion === 'exportar'));
+  assert.ok(audit.body.auditoria.some((entry) => entry.accion === 'reiniciar'));
+});
+
+test('solo con invitación se puede crear un consultorio', async (t) => {
+  const agent = request.agent(app);
+
+  const blocked = db.prepare(`INSERT INTO usuarios (email, nombre, rol, estado) VALUES ('auto-registrado@test.local','Auto','doctor','pendiente')`).run();
+  const blockedToken = jwt.sign({ sub: String(blocked.lastInsertRowid), consultorioId: null, rol: 'doctor' }, config.jwtSecret, { expiresIn: '1d' });
+  await agent.get('/api/agenda').set('Cookie', `dentista_token=${blockedToken}`).expect(403);
+  await agent.post('/api/consultorio/onboarding').set('Cookie', `dentista_token=${blockedToken}`).send({ nombre: 'Sin invitación' }).expect(403);
+  db.prepare('DELETE FROM usuarios WHERE id=?').run(blocked.lastInsertRowid);
+
+  const invited = db.prepare(`INSERT INTO usuarios (email, nombre, rol, estado) VALUES ('invitado@test.local','Invitado','doctor','preautorizado')`).run();
+  const invitedId = invited.lastInsertRowid;
+  t.after(() => {
+    db.prepare(`UPDATE consultorios SET eliminado_en=CURRENT_TIMESTAMP WHERE nombre='Clínica Invitación'`).run();
+    db.prepare('UPDATE usuarios SET eliminado_en=CURRENT_TIMESTAMP WHERE id=?').run(invitedId);
+  });
+  db.prepare(`UPDATE usuarios SET estado='activo' WHERE id=?`).run(invitedId);
+  const invitedToken = jwt.sign({ sub: String(invitedId), consultorioId: null, rol: 'doctor' }, config.jwtSecret, { expiresIn: '1d' });
+  const created = await agent.post('/api/consultorio/onboarding').set('Cookie', `dentista_token=${invitedToken}`).send({ nombre: 'Clínica Invitación' }).expect(201);
+  assert.ok(created.body.consultorio_id);
+  const active = db.prepare('SELECT estado, consultorio_id FROM usuarios WHERE id=?').get(invitedId);
+  assert.equal(active.estado, 'activo');
 });

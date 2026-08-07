@@ -10,7 +10,7 @@ confirmarse antes de publicar.
 project_name: sonrident
 repository: luismurfs17-png/dental
 production_branch: main
-production_url: PENDIENTE_DOMINIO
+production_url: https://sonrident.copaapp.cloud
 health_path: /api/health
 deployment_platform: Dokploy
 ```
@@ -51,6 +51,7 @@ Linux y el contenedor maneja `SIGTERM` antes de cerrar SQLite.
 | `GOOGLE_CLIENT_ID` | No | Google Cloud OAuth Web Client |
 | `GOOGLE_CLIENT_SECRET` | Sí | Google Cloud OAuth |
 | `GOOGLE_CALLBACK_URL` | No | `https://DOMINIO/api/auth/google/callback` |
+| `SUPERADMIN_EMAILS` | No | Correos del administrador, separados por coma |
 | `SMTP_HOST` | No | `smtp.gmail.com` al activar Gmail |
 | `SMTP_PORT` | No | `587` |
 | `SMTP_SECURE` | No | `false` para STARTTLS |
@@ -109,6 +110,28 @@ no es un backup. Programar una copia externa diaria y probar restauración antes
 de producción. No copiar solo el archivo `.sqlite` mientras la app escribe;
 usar el mecanismo de backup de SQLite o detener el contenedor de forma limpia.
 
+## Copias de seguridad locales
+
+La app genera snapshots WAL-safe dentro de `data/backups/<etiqueta>-<fecha>/`:
+`dentista.sqlite` (con `db.backup()`) más una copia de `uploads/`. Cada reinicio
+a cero de un consultorio también guarda un snapshot previo.
+
+- Variables: `BACKUP_ENABLED` (por defecto `false`), `BACKUP_CRON`
+  (`0 3 * * *`), `BACKUP_RETENTION_LOCAL` (3 snapshots, eliminando los viejos).
+- Mantener la retención local pequeña: la copia duradera es el backup externo
+  (Restic→S3) que programa Dokploy sobre el volumen. Probar la restauración
+  reemplazando `/app/data/dentista.sqlite` y `uploads/` y reiniciando el
+  contenedor mientras la app está detenida.
+- Regla de escalabilidad: migrar de SQLite solo si se superan ~60–80 clínicas,
+  los backups superan los 2–3 GB o la restauración excede 1 h.
+
+## Reinicio a cero de un consultorio (superadmin)
+
+El endpoint `POST /api/admin/consultorios/:id/reiniciar` (bajo confirmación)
+vacíar pacientes, citas, registros, notas, pagos y auditoría del consultorio;
+conserva usuarios, servicios, horarios y configuración. El evento queda en
+`admin_auditoria` con la cuenta de registros eliminados.
+
 ## Primer despliegue
 
 1. Crear un repositorio GitHub privado exclusivo para este proyecto.
@@ -156,6 +179,78 @@ datos reales.
 - Docker: no probado localmente porque Docker no está instalado en esta
   máquina. La primera construcción en Dokploy debe tratarse como verificación
   pendiente, no como despliegue ya validado.
+
+## Estado del despliegue del 4 de agosto de 2026
+
+```yaml
+repository_visibility: private
+deployed_commit: f568d6109cacf2a57ba0bcd52ba87372ddfeda9f
+application_name: sonrident
+dokploy_project: DENTISTA
+dokploy_environment: production
+provider: GitHub
+repository: luismurfs17-png/dental
+branch: main
+build_path: /
+build_type: Dockerfile
+dockerfile_path: Dockerfile
+docker_context_path: .
+domain: sonrident.copaapp.cloud
+container_port: 3000
+volume_name: sonrident_data
+volume_mount_path: /app/data
+autodeploy: disabled_during_initial_setup
+```
+
+Proceso completado:
+
+1. Se creó el repositorio privado y se subió `main` sin `.env`, SQLite,
+   comprobantes, `node_modules` ni artefactos de build.
+2. Dokploy obtuvo acceso al repositorio privado mediante su GitHub App.
+3. Se configuró el Dockerfile raíz, contexto `.`, rama `main` y build path `/`.
+4. Se configuraron `NODE_ENV=production`, `PORT=3000`, `DATA_DIR=/app/data`,
+   `JWT_DAYS=7`, `CLIENT_URL` y `GOOGLE_CALLBACK_URL`. `JWT_SECRET` está guardado
+   únicamente en Dokploy y no debe copiarse a este documento.
+5. Se creó el volumen nombrado `sonrident_data` montado en `/app/data`.
+6. El DNS `A` de `sonrident.copaapp.cloud` apunta a `76.13.253.130`.
+7. Se configuró el dominio con HTTPS, paths `/` y puerto interno `3000`.
+8. La imagen se construyó correctamente en Dokploy y el contenedor arrancó.
+
+Verificaciones realizadas:
+
+- `https://sonrident.copaapp.cloud` sirve la SPA.
+- `https://sonrident.copaapp.cloud/api/health` devuelve estado saludable y
+  confirma SQLite.
+- HTTPS responde correctamente.
+- El primer intento falló con `Github Provider not found`; se corrigió
+  seleccionando otra vez la cuenta, repositorio y rama, y guardando Provider.
+- Un `Bad Gateway` temporal ocurrió mientras Docker todavía exportaba la imagen;
+  desapareció al finalizar el despliegue.
+
+Pendientes para continuar:
+
+1. Configurar Google OAuth. Crear o usar un proyecto de Google Cloud, registrar
+   el origen `https://sonrident.copaapp.cloud` y la URI
+   `https://sonrident.copaapp.cloud/api/auth/google/callback`. Guardar
+   `GOOGLE_CLIENT_ID` y `GOOGLE_CLIENT_SECRET` solo en Dokploy. Actualmente el
+   portal abre, pero el acceso normal con Google no está disponible.
+2. Configurar Gmail SMTP únicamente después de activar 2FA y crear una
+   contraseña de aplicación. Guardar `SMTP_USER` y `SMTP_PASS` solo en Dokploy.
+3. Probar el flujo real completo: alta del doctor, consultorio, horario,
+   tratamiento, paciente autorizado, reserva, reprogramación, notificación,
+   evidencia QR, validación del pago y saldo.
+4. Verificar persistencia creando datos ficticios, reiniciando o redesplegando y
+   confirmando que SQLite y uploads sobreviven en `sonrident_data`.
+5. Configurar backup externo diario del volumen y probar una restauración.
+6. Proteger el panel de Dokploy con dominio y HTTPS; durante la configuración se
+   accedió por HTTP a `76.13.253.130:3000`.
+7. Confirmar 2FA en GitHub, Hostinger, Google y Dokploy, además de revisar logs,
+   recursos, rate limiting y política de privacidad antes de usar datos reales.
+8. Decidir si activar Autodeploy después de completar y verificar OAuth,
+   persistencia y backups.
+
+Para reanudar, comenzar por el punto 1 de pendientes. No ejecutar `npm run seed`
+en producción y mantener una sola réplica mientras se use SQLite.
 
 ## Rollback
 

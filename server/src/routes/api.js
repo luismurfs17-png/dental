@@ -69,6 +69,7 @@ const clinicJson = (row) => {
 router.post('/consultorio/onboarding', allowRoles('doctor'), (req, res, next) => {
   try {
     if (req.user.consultorio_id) throw new ApiError(409, 'El usuario ya pertenece a un consultorio');
+    if (req.user.estado === 'pendiente') throw new ApiError(403, 'Su correo no tiene una invitación para crear un consultorio');
     required(req.body, ['nombre']);
     const result = db.transaction(() => {
       const clinic = db.prepare(`INSERT INTO consultorios (nombre, nit, telefono, email, direccion, zona_horaria)

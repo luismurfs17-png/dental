@@ -22,14 +22,22 @@ const teamNav = [
   { to: '/auditoria', label: 'Auditoría', icon: 'history', doctorOnly: true },
 ]
 
+const adminNavItem = { to: '/admin', label: 'Administrar', icon: 'settings' }
+
 export default function AppShell() {
   const { user, setUser } = useAuth()
   const navigate = useNavigate()
   const location = useLocation()
   const role = user?.rol || user?.role
   const isPatient = role === 'paciente'
-  const navItems = (isPatient ? patientNav : teamNav).filter((item) => !item.doctorOnly || role === 'doctor')
-  const mobileItems = isPatient ? navItems : navItems.filter((item) => ['/agenda', '/pacientes', '/cobros', '/notificaciones'].includes(item.to))
+  const isAdmin = Boolean(user?.es_admin)
+  const hasClinic = Boolean(user?.consultorio || user?.consultorioId || user?.consultorio_id)
+  const adminOnly = isAdmin && !hasClinic
+  const baseNav = isPatient ? patientNav : teamNav
+  const navItems = adminOnly
+    ? [adminNavItem]
+    : [...baseNav.filter((item) => !item.doctorOnly || role === 'doctor'), ...(isAdmin ? [adminNavItem] : [])]
+  const mobileItems = adminOnly || isPatient ? navItems : navItems.filter((item) => ['/agenda', '/pacientes', '/cobros', '/notificaciones'].includes(item.to))
   const [mobileMenu, setMobileMenu] = useState(false)
 
   useEffect(() => setMobileMenu(false), [location.pathname])
@@ -48,8 +56,8 @@ export default function AppShell() {
       <aside className="sidebar">
         <div className="brand"><span className="brand-mark"><Icon name="tooth" size={23} /></span><span>SONRIDENT</span></div>
         <div className="clinic-chip">
-          <span>{(user?.consultorio?.nombre || 'Mi consultorio').slice(0, 1)}</span>
-          <div><strong>{user?.consultorio?.nombre || 'Mi consultorio'}</strong><small>{isPatient ? 'Portal del paciente' : role === 'doctor' ? 'Cuenta médica' : 'Equipo operativo'}</small></div>
+          <span>{(user?.consultorio?.nombre || (adminOnly ? 'Administración' : 'Mi consultorio')).slice(0, 1)}</span>
+          <div><strong>{user?.consultorio?.nombre || (adminOnly ? 'Administración' : 'Mi consultorio')}</strong><small>{isPatient ? 'Portal del paciente' : adminOnly ? 'Superadministración' : role === 'doctor' ? 'Cuenta médica' : 'Equipo operativo'}</small></div>
         </div>
         <nav className="side-nav" aria-label="Navegación principal">
           <small>ESPACIO DE TRABAJO</small>
