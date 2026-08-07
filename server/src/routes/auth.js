@@ -94,7 +94,7 @@ router.get('/google/callback', asyncRoute(async (req, res) => {
   const ticket = await google.verifyIdToken({ idToken: tokens.id_token, audience: config.google.clientId });
   const user = findOrCreateGoogleUser(ticket.getPayload());
   issueSession(res, user);
-  res.redirect(`${config.clientUrl}/login?success=1`);
+  res.redirect(`${config.clientUrl}/auth/success`);
 }));
 
 router.post('/google', asyncRoute(async (req, res) => {

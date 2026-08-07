@@ -1,11 +1,12 @@
 import { useContext, useEffect, useState } from 'react'
-import { Navigate, Route, Routes, useLocation } from 'react-router-dom'
+import { Navigate, Route, Routes, useLocation, useNavigate } from 'react-router-dom'
 import { api } from './lib/api.js'
 import { AuthContext } from './context/AuthContext.jsx'
 import AppShell from './components/AppShell.jsx'
 import { ErrorState, Loading } from './components/UI.jsx'
 import Icon from './components/Icon.jsx'
 import Login, { homeFor } from './pages/Login.jsx'
+import AuthSuccess from './pages/AuthSuccess.jsx'
 import Onboarding from './pages/Onboarding.jsx'
 import AdminPanel from './pages/admin/AdminPanel.jsx'
 import { BookAppointment, PatientAppointments, PatientDashboard, PatientHealth, PatientPayments } from './pages/patient/PatientPages.jsx'
@@ -41,6 +42,7 @@ export default function App() {
     <AuthContext.Provider value={{ user, setUser }}>
       <Routes>
         <Route path="/login" element={<Login />} />
+        <Route path="/auth/success" element={<AuthSuccess />} />
         <Route path="/crear-consultorio" element={<RequireAuth><Onboarding /></RequireAuth>} />
         <Route element={<RequireAuth><AppShell /></RequireAuth>}>
           <Route path="/inicio" element={<RoleRoute allow={['paciente']}><PatientDashboard /></RoleRoute>} />
