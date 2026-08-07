@@ -11,25 +11,61 @@ const google = new OAuth2Client(config.google.clientId, config.google.clientSecr
 
 function findOrCreateGoogleUser(profile) {
   if (!profile.email_verified) throw new ApiError(401, 'Google no verificó el correo electrónico');
+  
   let user = db.prepare(`SELECT * FROM usuarios WHERE google_sub = ? AND eliminado_en IS NULL`).get(profile.sub);
+  
   if (!user) {
     user = db.prepare(`SELECT * FROM usuarios
       WHERE email = ? COLLATE NOCASE AND google_sub IS NULL AND eliminado_en IS NULL
       ORDER BY CASE estado WHEN 'preautorizado' THEN 0 ELSE 1 END, id LIMIT 1`).get(profile.email);
   }
+  
   if (user?.estado === 'suspendido') throw new ApiError(403, 'El usuario está suspendido');
+  
   if (user) {
     const estado = user.estado === 'pendiente' ? 'pendiente' : 'activo';
-    db.prepare(`UPDATE usuarios SET google_sub = ?, nombre = ?, avatar_url = ?, estado = ?,
-      ultimo_acceso_en = CURRENT_TIMESTAMP, actualizado_en = CURRENT_TIMESTAMP WHERE id = ?`)
-      .run(profile.sub, profile.name || user.nombre, profile.picture || user.avatar_url, estado, user.id);
+    try {
+      db.prepare(`UPDATE usuarios SET google_sub = ?, nombre = ?, avatar_url = ?, estado = ?,
+        ultimo_acceso_en = CURRENT_TIMESTAMP, actualizado_en = CURRENT_TIMESTAMP WHERE id = ?`)
+        .run(profile.sub, profile.name || user.nombre, profile.picture || user.avatar_url, estado, user.id);
+    } catch (error) {
+      if (error.code === 'SQLITE_CONSTRAINT_UNIQUE') {
+        const existingUser = db.prepare(`SELECT id FROM usuarios WHERE google_sub = ? AND eliminado_en IS NULL`).get(profile.sub);
+        if (existingUser && existingUser.id !== user.id) {
+          db.prepare(`UPDATE usuarios SET google_sub = NULL WHERE id = ?`).run(existingUser.id);
+          db.prepare(`UPDATE usuarios SET google_sub = ?, nombre = ?, avatar_url = ?, estado = ?,
+            ultimo_acceso_en = CURRENT_TIMESTAMP, actualizado_en = CURRENT_TIMESTAMP WHERE id = ?`)
+            .run(profile.sub, profile.name || user.nombre, profile.picture || user.avatar_url, estado, user.id);
+        }
+      } else {
+        throw error;
+      }
+    }
   } else {
-    const result = db.prepare(`INSERT INTO usuarios
-      (email, nombre, avatar_url, google_sub, rol, estado, ultimo_acceso_en)
-      VALUES (?, ?, ?, ?, 'doctor', 'pendiente', CURRENT_TIMESTAMP)`)
-      .run(profile.email, profile.name || profile.email, profile.picture || null, profile.sub);
-    user = db.prepare('SELECT * FROM usuarios WHERE id = ?').get(result.lastInsertRowid);
+    try {
+      const result = db.prepare(`INSERT INTO usuarios
+        (email, nombre, avatar_url, google_sub, rol, estado, ultimo_acceso_en)
+        VALUES (?, ?, ?, ?, 'doctor', 'pendiente', CURRENT_TIMESTAMP)`)
+        .run(profile.email, profile.name || profile.email, profile.picture || null, profile.sub);
+      user = db.prepare('SELECT * FROM usuarios WHERE id = ?').get(result.lastInsertRowid);
+    } catch (error) {
+      if (error.code === 'SQLITE_CONSTRAINT_UNIQUE') {
+        const existingUser = db.prepare(`SELECT * FROM usuarios WHERE google_sub = ? AND eliminado_en IS NULL`).get(profile.sub);
+        if (existingUser) {
+          user = existingUser;
+          const estado = user.estado === 'pendiente' ? 'pendiente' : 'activo';
+          db.prepare(`UPDATE usuarios SET nombre = ?, avatar_url = ?, estado = ?,
+            ultimo_acceso_en = CURRENT_TIMESTAMP, actualizado_en = CURRENT_TIMESTAMP WHERE id = ?`)
+            .run(profile.name || user.nombre, profile.picture || user.avatar_url, estado, user.id);
+        } else {
+          throw error;
+        }
+      } else {
+        throw error;
+      }
+    }
   }
+  
   return withAdminFlag(db.prepare(`SELECT id, consultorio_id, email, nombre, avatar_url, rol, estado
     FROM usuarios WHERE id = ?`).get(user.id));
 }
