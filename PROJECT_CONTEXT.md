@@ -14,7 +14,8 @@ No tiene landing page. La aplicación abre directamente en el acceso o en el por
 - Backend: Express 5 y SQLite WAL con `better-sqlite3`.
 - Frontend: React 19 y Vite 7.
 - Autenticación: Google OAuth 2.0 y cookie JWT HTTP-only.
-- Correo: Gmail SMTP mediante Nodemailer.
+- Correo: Gmail SMTP mediante Nodemailer (opcional).
+- Rate limiting: `express-rate-limit` en `/api/auth`, `/api/admin` y `/api`.
 - Producción: un contenedor Docker servido por Express en el puerto `3000`.
 - Persistencia: `/app/data/dentista.sqlite` y `/app/data/uploads`.
 - Usar una sola réplica mientras la base sea SQLite.
@@ -23,71 +24,35 @@ No tiene landing page. La aplicación abre directamente en el acceso o en el por
 
 ### Superadministrador
 
-- Se define por correo en la variable `SUPERADMIN_EMAILS` (separados por coma); no se guarda como rol en la base de datos.
-- Conserva su cuenta y consultorio propios si ya los tiene; la bandera `es_admin` solo añade el panel extra.
-- Ve el panel `Administrar` (`/admin` y `GET/POST /api/admin/*`): métricas, consultorios, usuarios e invitaciones.
-- Invita correos (`POST /api/admin/invitaciones`); el invitado queda `preautorizado` y al iniciar con Google se activa y puede crear su consultorio.
-- Cambia estado (`activo`/`suspendido`/`pendiente`/`preautorizado`) o elimina usuarios; suspendidos y eliminados pierden el acceso.
-- Puede eliminar un consultorio completo (borrado lógico del consultorio y de sus usuarios).
-- Sus acciones quedan en la tabla `admin_auditoria`.
-- No puede suspenderse ni eliminarse a sí mismo.
+- Se define por correo en `SUPERADMIN_EMAILS` (separados por coma); no se guarda como rol en la base.
+- Conserva su cuenta y consultorio propios; `es_admin` solo añade el panel extra.
+- Panel `Administrar` (`/admin` y `/api/admin/*`): métricas, consultorios, usuarios, invitaciones, exportar ZIP, reiniciar.
+- Invita correos; el invitado queda `preautorizado` y al iniciar con Google se activa.
+- No puede suspenderse ni eliminarse a sí mismo. Acciones en `admin_auditoria`.
 
 ### Doctor
 
-- Control de su agenda y citas.
-- Crea y edita pacientes, códigos y datos clínicos.
-- Autoriza correos de pacientes.
-- Configura tratamientos, precios, horarios, QR y consultorio.
-- Valida o anula pagos QR.
-- Consulta Auditoría.
-- Archiva pacientes, citas y otros registros permitidos.
+- Agenda y citas; pacientes y datos clínicos; autoriza correos; tratamientos, precios, horarios, QR; valida pagos QR; Auditoría; archiva registros.
 
 ### Operativo
 
-- Consulta la agenda completa del consultorio.
-- Agenda visitas manualmente y selecciona doctor.
-- Crea y edita datos básicos de pacientes.
-- Asigna o modifica el código numérico del sistema anterior.
-- Registra pagos y notas operativas.
-- Los registros clínicos que crea quedan pendientes de validación.
-- No autoriza correos, modifica datos clínicos protegidos, cambia precios ni consulta Auditoría.
+- Agenda del consultorio; agenda visitas y elige doctor; crea/edita datos básicos de pacientes; registra pagos y notas; no autoriza correos ni ve Auditoría.
 
 ### Paciente
 
-- Solo consulta su propia ficha, citas, historia, saldo y pagos.
-- Reserva citas en horarios disponibles.
-- Ve horarios ocupados únicamente como `Ocupado`, sin datos de otros pacientes, servicios, motivos o contactos.
-- Puede reprogramar una cita una sola vez y únicamente con al menos 5 horas de anticipación.
-- Dentro de las últimas 5 horas debe llamar al consultorio.
-- Puede reportar pagos QR con evidencia.
+- Solo su ficha, citas, historia, saldo y pagos; reserva en horarios libres; bloques ajenos como `Ocupado`; una reprogramación con ≥5 h de anticipación; reporta pagos QR.
 
 ## Reglas importantes
 
-- Solo los correos invitados por el superadministrador pueden crear un consultorio; quien se auto-registra queda `pendiente` y sin acceso hasta recibir invitación.
-- El código del paciente es obligatorio, solo numérico, máximo 32 dígitos y único por consultorio.
-- Se almacena como texto para conservar ceros iniciales.
-- La búsqueda prioriza código exacto, luego prefijo y después coincidencias parciales.
-- Las citas se confirman inmediatamente.
-- La API valida horario del doctor y conflictos antes de crear o reprogramar.
-- Doctor y operativo pueden crear visitas desde el botón `Nueva visita` o haciendo clic en una franja vacía del calendario.
-- El calendario del equipo muestra inicio y finalización de cada cita.
-- El paciente no recibe información privada de bloques ocupados.
-- Pagos QR quedan `por_verificar`; solo el doctor puede marcarlos `valido` o `anulado`.
-- El saldo considera citas atendidas menos pagos válidos.
-- Los borrados relevantes son lógicos y quedan auditados.
-- Auditoría es exclusiva del doctor y filtra por usuario, paciente, fecha y acción.
+- Solo correos invitados por el superadmin pueden crear consultorio; auto-registro queda `pendiente`.
+- Código de paciente: obligatorio, solo numérico, máx. 32 dígitos, único por consultorio (texto para ceros iniciales).
+- Citas confirmadas de inmediato; API valida horario y conflictos.
+- Pagos QR quedan `por_verificar`; solo el doctor marca `valido` o `anulado`.
+- Saldo = citas atendidas − pagos válidos. Borrados lógicos y auditados.
 
 ## Correos
 
-Con SMTP configurado se envían:
-
-- Confirmación al crear una cita.
-- Aviso al reprogramar una cita, tanto por paciente como por personal.
-- Recordatorio programado antes de la cita.
-
-Una reprogramación elimina el marcador del recordatorio anterior para permitir el aviso del nuevo horario. Si SMTP no está configurado, la aplicación continúa funcionando y omite los correos.
-
-Variables principales:
+Con SMTP: confirmación al crear cita, aviso al reprogramar, recordatorio programado. Sin SMTP la app sigue y omite correos.
 
 ```env
 SMTP_HOST=smtp.gmail.com
@@ -100,137 +65,88 @@ REMINDER_CRON=0 * * * *
 REMINDER_HOURS=24
 ```
 
-`SMTP_PASS` debe ser una contraseña de aplicación de Google, nunca la contraseña normal.
+`SMTP_PASS` = contraseña de aplicación de Google (nunca la clave normal).
 
 ## Diseño
 
-- Marca visible: `SONRIDENT`.
-- Paleta principal: azul `#24577a`, turquesa `#45bfc4` y lavanda `#6672bd`.
-- Interfaz responsive para escritorio, tablet y móvil.
-- En móvil hay navegación principal y menú `Más` con todas las rutas y cierre de sesión.
-- Se adaptaron efectos moderados inspirados en Magic UI bajo licencia MIT.
-- Respetar `prefers-reduced-motion` y evitar animaciones que dificulten tareas clínicas.
+- Marca: `SONRIDENT`. Paleta: `#24577a`, `#45bfc4`, `#6672bd`.
+- Responsive; en móvil menú `Más`. Respetar `prefers-reduced-motion`.
 
 ## Archivos clave
 
-- `server/src/routes/api.js`: rutas, permisos y reglas principales.
-- `server/src/routes/admin.js`: panel del superadministrador (invitaciones, consultorios, usuarios).
-- `server/src/routes/auth.js`: Google OAuth y acceso de desarrollo.
-- `server/src/schema.sql`: esquema SQLite.
-- `server/src/db.js`: apertura, migraciones incrementales y auditoría.
-- `server/src/email.js`: transporte SMTP y correos de citas.
-- `server/src/reminders.js`: cron de recordatorios.
-- `server/src/seed.js`: datos ficticios.
-- `server/test/app.test.js`: pruebas de integración.
-- `client/src/App.jsx`: rutas y permisos frontend.
-- `client/src/pages/admin/AdminPanel.jsx`: centro de control del superadministrador.
-- `client/src/components/AppShell.jsx`: navegación por rol.
-- `client/src/pages/team/TeamPages.jsx`: agenda, pacientes, servicios, caja y avisos.
-- `client/src/pages/team/Audit.jsx`: pantalla de Auditoría.
-- `client/src/pages/team/PatientDetail.jsx`: expediente del paciente.
-- `client/src/pages/patient/PatientPages.jsx`: portal, reservas, citas, pagos y salud.
-- `client/src/styles/global.css`: diseño y responsive.
-- `Dockerfile`: build de React y runtime Node 22.
-- `DEPLOYMENT_RUNBOOK.md`: configuración detallada de Dokploy.
+- `server/src/routes/api.js` — reglas principales.
+- `server/src/routes/admin.js` — panel superadmin.
+- `server/src/routes/auth.js` — Google OAuth y acceso desarrollo.
+- `server/src/rateLimit.js` — limitadores de tasa.
+- `server/src/backup.js` — snapshots locales.
+- `server/src/demo.js` — consultorio demo de presentación (`npm run demo`).
+- `server/src/schema.sql`, `db.js`, `email.js`, `reminders.js`, `seed.js`.
+- `server/test/app.test.js` + `server/test/preload.mjs`.
+- `client/src/App.jsx`, `pages/admin/AdminPanel.jsx`, `pages/team/*`, `pages/patient/*`.
+- `DEPLOYMENT_RUNBOOK.md`, `SUPERADMIN_CONTEXT.md`.
 
 ## Desarrollo local
 
-Backend:
-
 ```bash
-cd server
-npm ci
-copy .env.example .env
-npm run seed
-npm run dev
+cd server && npm ci && copy .env.example .env && npm run seed && npm run dev
+cd client && npm ci && npm run dev
 ```
 
-Frontend:
+- Frontend: `http://localhost:5173` · Backend: `http://localhost:3000` · Salud: `/api/health`.
+- Dev logins: `doctora@sonrisas.test`, `recepcion@sonrisas.test`, `paciente@sonrisas.test`.
+
+## Verificación
 
 ```bash
-cd client
-npm ci
-npm run dev
+cd server && npm test
+cd ../client && npm run build
 ```
 
-URLs:
-
-- Frontend: `http://localhost:5173`.
-- Backend: `http://localhost:3000`.
-- Salud: `http://localhost:3000/api/health`.
-
-Accesos ficticios de desarrollo:
-
-- `doctora@sonrisas.test`.
-- `recepcion@sonrisas.test`.
-- `paciente@sonrisas.test`.
-
-El acceso de desarrollo está deshabilitado en producción.
-
-## Verificación actual
-
-```bash
-cd server
-npm test
-
-cd ../client
-npm run build
-```
-
-Estado verificado:
-
-- 12 pruebas del servidor aprobadas.
-- Build del frontend aprobado.
-- Auditoría npm del servidor: 0 vulnerabilidades.
-- Frontend y API locales responden `200`.
-- Docker no está instalado en esta máquina; la imagen no se ha probado localmente.
-- El cliente conserva un aviso de React Router relacionado con RSC. SONRIDENT es una SPA y no usa RSC. No ejecutar `npm audit fix --force`.
+Estado (agosto 2026): **15/15 tests** OK; build cliente OK; 0 vulnerabilidades npm en server.
 
 ## Estado del despliegue
 
-- Repositorio privado: `https://github.com/luismurfs17-png/dental`.
-- Producción: `https://sonrident.copaapp.cloud`.
-- Commit desplegado: `f568d6109cacf2a57ba0bcd52ba87372ddfeda9f`.
-- Dokploy usa Dockerfile raíz, contexto `.`, puerto interno `3000` y una réplica.
-- El volumen `sonrident_data` está montado en `/app/data`.
-- La SPA, HTTPS y `GET /api/health` están verificados.
-- Google OAuth y Gmail SMTP siguen pendientes; el acceso normal todavía no funciona.
-- También faltan la prueba de persistencia tras redespliegue, backup externo,
-  restauración y validación funcional completa.
-- El proceso detallado y los pasos exactos para continuar están en
-  `DEPLOYMENT_RUNBOOK.md`, sección "Estado del despliegue del 4 de agosto de 2026".
+- Repo: `https://github.com/luismurfs17-png/dental` (privado).
+- Prod: `https://sonrident.copaapp.cloud`.
+- Google OAuth **operativo** (login verificado). Superadmin por `SUPERADMIN_EMAILS`.
+- Volumen `sonrident_data` → `/app/data`. Una réplica. Backups locales con cron si `BACKUP_ENABLED=true`.
+- SMTP **no** configurado. Backup externo y restauración **pendientes**.
+
+## Demo agenda (presentación)
+
+1. Login Google como superadmin → `/admin` o portal doctor.
+2. Cargar datos demo una vez en el contenedor: `node src/demo.js` (o `npm run demo` si el PATH tiene npm).
+3. El script crea `Clínica Demo SONRIDENT` con pacientes 10001–10004, 3 servicios, horario lun–vie 08–17, citas de ayer/hoy/mañana/pasado y vincula los correos de `SUPERADMIN_EMAILS` como doctor.
+4. Mostrar Agenda (semana/2 semanas/mes), nueva visita, reprogramación.
+5. Quitar demo después: `/admin` → eliminar o reiniciar consultorio.
+
+## Límites y riesgos actuales / futuros
+
+**Listo para demo de agenda**
+
+- OAuth, multi-tenant, agenda, pacientes, servicios, pagos QR, panel admin, rate limit, backups locales, tests verdes.
+
+**Pendiente antes de datos reales de clientes**
+
+1. Backup externo diario (Restic→S3 u equivalente) + **probar restauración**.
+2. 2FA en Google, GitHub, Hostinger y Dokploy.
+3. Cerrar acceso HTTP público al panel Dokploy.
+4. Política de privacidad / consentimiento de historias clínicas.
+5. Probar persistencia tras redesplegar (volumen).
+6. SMTP (opcional para la demo; necesario para recordatorios reales).
+
+**Límites técnicos**
+
+- SQLite: 10–30 clínicas cómodo; migrar si >60–80, backups >2–3 GB o restore >1 h.
+- Una sola réplica.
+- Sin correos hasta configurar SMTP.
+- No ejecutar `npm run seed` en producción de forma rutinaria; `demo.js` solo para presentación y es removible.
+- React Router tiene aviso de auditoría; no usar `npm audit fix --force`.
+
+**Módulos siguientes (expansión)**
+
+WhatsApp → presupuestos con abonos → odontograma → control de caja → reportes → consentimiento informado → link público de agendamiento.
 
 ## Criterio para continuar
 
-Antes de modificar una regla sensible, revisar permisos multi-tenant y añadir una prueba de integración. Después de cambios ejecutar siempre `npm test` en `server` y `npm run build` en `client`.
-
-## Módulos 1 y 2 completados (agosto 2026)
-
-### Módulo 1: Backup y exportación
-
-- **Backup local**: `server/src/backup.js` genera snapshots WAL-safe con `db.backup()` + copia de `uploads/` en `data/backups/`.
-- Variables: `BACKUP_ENABLED`, `BACKUP_CRON`, `BACKUP_RETENTION_LOCAL`.
-- Integrado en `server/src/index.js` junto a reminders.
-- **Exportación ZIP**: `GET /api/admin/consultorios/:id/exportar` genera ZIP con JSON, HTML y evidencias.
-
-### Módulo 2: Panel superadmin enriquecido
-
-- **Listado enriquecido**: `GET /api/admin/consultorios` ahora incluye `estado_actividad`, `ingresos_total`, `ultima_actividad`.
-- **Detalle**: `GET /api/admin/consultorios/:id` con próximas citas, últimos pagos, evidencias.
-- **Auditoría**: `GET /api/admin/auditoria` con filtros por fecha y acción.
-- **Reinicio**: `POST /api/admin/consultorios/:id/reiniciar` vacía pacientes/citas/pagos conservando usuarios y configuración. Snapshot previo de seguridad.
-- **Panel UI**: `client/src/pages/admin/AdminPanel.jsx` con badges de actividad, botones de detalle, exportar, reiniciar.
-
-### Archivos nuevos
-
-- `server/src/backup.js`: módulo de backups.
-- `server/src/routes/admin.js`: rutas del panel superadmin enriquecido.
-- `client/src/pages/admin/AdminPanel.jsx`: UI del panel.
-- `SUPERADMIN_CONTEXT.md`: contexto detallado del rol superadmin.
-
-### Próximos pasos
-
-1. **Producción**: Configurar `SUPERADMIN_EMAILS`, Google OAuth y backup externo en Dokploy.
-2. **Tests**: Los tests automatizados tienen un problema con NODE_ENV en ESM que requiere solución (loader personalizado o reestructuración de imports).
-3. **Módulos siguientes**: WhatsApp, presupuestos con abonos, odontograma, control de caja, reportes, consentimiento informado, link público de agendamiento.
-4. **Infraestructura**: Rate limiting, 2FA, política de privacidad.
+Antes de tocar reglas sensibles: revisar multi-tenant y añadir prueba de integración. Tras cambios: `npm test` en server y `npm run build` en client.

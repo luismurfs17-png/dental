@@ -4,32 +4,33 @@ Portal móvil para consultorios dentales, pacientes y personal operativo. Cada
 consultorio conserva sus pacientes, agenda, historial clínico y caja de forma
 aislada.
 
+Producción: https://sonrident.copaapp.cloud
+
 ## Funciones actuales
 
-- Acceso con Google y autorización previa de pacientes por correo.
-- Alta autónoma de un consultorio por su doctor propietario.
+- Acceso con Google OAuth y cookie JWT HTTP-only.
+- Superadministrador (`SUPERADMIN_EMAILS`) con panel `/admin`.
+- Alta de consultorio solo con invitación previa del superadmin.
 - Roles `doctor`, `operativo` y `paciente` con permisos separados.
 - Agenda y reserva inmediata según horarios y disponibilidad real.
-- Horarios ocupados visibles para pacientes sin exponer información de otras citas.
-- Una reprogramación autónoma por cita hasta cinco horas antes; después se coordina por teléfono.
-- Pacientes con código numérico heredado, único por consultorio y disponible en búsquedas.
+- Vistas semana / 2 semanas / mes, arrastrar y soltar citas.
+- Horarios ocupados visibles para pacientes sin exponer datos ajenos.
+- Una reprogramación autónoma por cita hasta cinco horas antes.
+- Pacientes con código numérico único por consultorio.
 - Tratamientos y precios en bolivianos (`Bs`).
-- Saldos calculados desde citas atendidas y pagos válidos.
-- Pago QR con evidencia; solo el doctor puede validarlo o anularlo.
-- Confirmaciones, reprogramaciones y recordatorios opcionales por Gmail SMTP, además de notificaciones internas.
-- Auditoría visual filtrable por usuario, fecha, paciente y acción.
-- Borrado lógico y trazabilidad vinculada al paciente.
+- Saldos desde citas atendidas y pagos válidos.
+- Pago QR con evidencia; solo el doctor valida o anula.
+- Backups locales WAL-safe + exportación ZIP por consultorio.
+- Rate limiting en `/api/auth`, `/api/admin` y `/api`.
+- Auditoría filtrable y borrado lógico.
 
 ## Tecnología
 
-- Node.js 22.
-- Express 5 y SQLite con `better-sqlite3`.
+- Node.js 22, Express 5, SQLite (`better-sqlite3` WAL).
 - React 19 y Vite 7.
-- Un contenedor Docker sirve API e interfaz por el puerto `3000`.
+- Un contenedor Docker sirve API e interfaz en el puerto `3000`.
 
 ## Desarrollo local
-
-Requisitos: Node.js 22 y npm.
 
 ```bash
 cd server
@@ -47,14 +48,20 @@ npm ci
 npm run dev
 ```
 
-Abrir `http://localhost:5173`. El acceso de desarrollo acepta estos datos
-ficticios después de ejecutar la semilla:
+Abrir `http://localhost:5173`. Accesos ficticios tras la semilla:
 
 - `doctora@sonrisas.test`
 - `recepcion@sonrisas.test`
 - `paciente@sonrisas.test`
 
-El acceso de desarrollo no aparece ni funciona con `NODE_ENV=production`.
+El acceso de desarrollo no funciona con `NODE_ENV=production`.
+
+Consultorio demo (datos de presentación de agenda):
+
+```bash
+cd server
+npm run demo
+```
 
 ## Verificación
 
@@ -64,13 +71,38 @@ npm test
 
 cd ../client
 npm run build
-
-cd ..
-docker build -t sonrident:test .
 ```
 
-La configuración de producción y Dokploy está documentada en
-`DEPLOYMENT_RUNBOOK.md`. Los secretos nunca deben guardarse en Git.
+Estado verificado (agosto 2026): **15/15 tests** del servidor y build del cliente OK.
 
-El resumen funcional y técnico para continuar el trabajo está en
-`PROJECT_CONTEXT.md`.
+## Demo de agenda (presentación)
+
+1. Entrar en https://sonrident.copaapp.cloud con Google (superadmin).
+2. Si aún no hay consultorio propio: completar onboarding o ejecutar `npm run demo` en el contenedor (una vez).
+3. Revisar Agenda (semana / 2 semanas / mes): citas de hoy, mañana y pasado.
+4. Crear visita desde franja vacía o botón «Nueva visita».
+5. Mostrar pacientes, servicios y reprogramación.
+
+Detalle y límites en `PROJECT_CONTEXT.md` y `DEPLOYMENT_RUNBOOK.md`.
+
+## Límites y riesgos actuales
+
+| Tema | Estado |
+|---|---|
+| Agenda, pacientes, citas, pagos QR | Operativo |
+| Google OAuth en producción | Operativo |
+| Correos (confirmación / recordatorio) | **Desactivado** (SMTP no configurado) |
+| Backup local (cron 03:00, retención 3) | Activo si `BACKUP_ENABLED=true` |
+| Backup externo (Restic→S3) | **Pendiente** — crítico antes de datos reales |
+| Restauración de backup | **No probada** |
+| 2FA en Google/GitHub/Dokploy/Hostinger | **Pendiente** (acción manual) |
+| Rate limiting API | Activo |
+| Escala SQLite | Bien para 10–30 clínicas; migrar si >60–80 |
+| Réplicas | Solo 1 con SQLite |
+| Módulos futuros | WhatsApp, presupuestos, odontograma, caja, reportes, consentimiento, link público |
+
+## Documentación
+
+- `PROJECT_CONTEXT.md` — continuidad del producto y módulos.
+- `DEPLOYMENT_RUNBOOK.md` — Dokploy, variables, backups, demo en prod.
+- `SUPERADMIN_CONTEXT.md` — panel superadmin.

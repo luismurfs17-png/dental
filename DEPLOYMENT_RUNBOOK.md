@@ -160,97 +160,82 @@ conserva usuarios, servicios, horarios y configuración. El evento queda en
 - Activar 2FA en Google, GitHub, VPS y Dokploy.
 - Mantener Dokploy detrás de HTTPS y cerrar su acceso HTTP público.
 - Configurar backup externo y restauración probada.
-- Revisar rate limiting en OAuth/API según el tráfico real.
+- Rate limiting en OAuth/API: **activo** (`express-rate-limit`).
 - Confirmar política de privacidad y acceso a historias clínicas.
 - Mantener una sola réplica mientras se use SQLite.
 
 `npm audit` del servidor está limpio. El cliente conserva un aviso alto de
 React Router relacionado con RSC/Server Actions; SONRIDENT es una SPA con
 `BrowserRouter` y no habilita esas capacidades. No ejecutar
-`npm audit fix --force`: actualmente propone una versión con vulnerabilidades
-de redirección/XSS más amplias. Revisar una versión corregida antes de publicar
-datos reales.
+`npm audit fix --force`.
 
-## Estado de verificación local
+## Estado de verificación local (agosto 2026)
 
-- Pruebas del servidor: 12 aprobadas.
+- Pruebas del servidor: **15/15** aprobadas (`npm test` con preload aislado).
 - Build de React: aprobado.
 - Auditoría del servidor: 0 vulnerabilidades.
-- Docker: no probado localmente porque Docker no está instalado en esta
-  máquina. La primera construcción en Dokploy debe tratarse como verificación
-  pendiente, no como despliegue ya validado.
+- Rate limiting: activo en `/api/auth`, `/api/admin`, `/api`.
+- Script demo: `npm run demo` / `node src/demo.js`.
 
-## Estado del despliegue del 4 de agosto de 2026
+## Demo de agenda en producción
+
+1. Redesplegar el commit actual en Dokploy.
+2. Confirmar `https://sonrident.copaapp.cloud/api/health`.
+3. Login con Google (superadmin en `SUPERADMIN_EMAILS`).
+4. Cargar datos de presentación **una sola vez** en el contenedor:
+   ```bash
+   node src/demo.js
+   ```
+   Crea `Clínica Demo SONRIDENT` (email `demo@sonrident.local`) con pacientes
+   10001–10004, servicios, horario lun–vie y citas de ayer/hoy/mañana/pasado.
+   Vincula los correos de `SUPERADMIN_EMAILS` como doctor del demo.
+5. Abrir Agenda y mostrar semana / 2 semanas / mes, nueva visita, reprogramación.
+6. Después de la demo: en `/admin` eliminar o reiniciar ese consultorio.
+
+No usar `npm run seed` de forma rutinaria en producción. `demo.js` es solo
+para presentación y es removible.
+
+## Estado del despliegue (actualizado agosto 2026)
 
 ```yaml
 repository_visibility: private
-deployed_commit: f568d6109cacf2a57ba0bcd52ba87372ddfeda9f
 application_name: sonrident
 dokploy_project: DENTISTA
 dokploy_environment: production
 provider: GitHub
 repository: luismurfs17-png/dental
 branch: main
-build_path: /
 build_type: Dockerfile
-dockerfile_path: Dockerfile
-docker_context_path: .
 domain: sonrident.copaapp.cloud
 container_port: 3000
 volume_name: sonrident_data
 volume_mount_path: /app/data
-autodeploy: disabled_during_initial_setup
+oauth_google: operativo
+smtp: no_configurado
+backup_local: disponible (BACKUP_ENABLED)
+backup_externo: pendiente
+rate_limiting: activo
 ```
 
-Proceso completado:
+Completado:
 
-1. Se creó el repositorio privado y se subió `main` sin `.env`, SQLite,
-   comprobantes, `node_modules` ni artefactos de build.
-2. Dokploy obtuvo acceso al repositorio privado mediante su GitHub App.
-3. Se configuró el Dockerfile raíz, contexto `.`, rama `main` y build path `/`.
-4. Se configuraron `NODE_ENV=production`, `PORT=3000`, `DATA_DIR=/app/data`,
-   `JWT_DAYS=7`, `CLIENT_URL` y `GOOGLE_CALLBACK_URL`. `JWT_SECRET` está guardado
-   únicamente en Dokploy y no debe copiarse a este documento.
-5. Se creó el volumen nombrado `sonrident_data` montado en `/app/data`.
-6. El DNS `A` de `sonrident.copaapp.cloud` apunta a `76.13.253.130`.
-7. Se configuró el dominio con HTTPS, paths `/` y puerto interno `3000`.
-8. La imagen se construyó correctamente en Dokploy y el contenedor arrancó.
+1. Repo privado, Dockerfile, volumen, HTTPS, health OK.
+2. Google OAuth operativo (login verificado con superadmin).
+3. Módulos 1–2: backups locales, exportación ZIP, panel admin enriquecido.
+4. Rate limiting API. Tests 15/15. Script `demo.js` para presentación de agenda.
 
-Verificaciones realizadas:
+Pendientes (antes de datos reales de clientes):
 
-- `https://sonrident.copaapp.cloud` sirve la SPA.
-- `https://sonrident.copaapp.cloud/api/health` devuelve estado saludable y
-  confirma SQLite.
-- HTTPS responde correctamente.
-- El primer intento falló con `Github Provider not found`; se corrigió
-  seleccionando otra vez la cuenta, repositorio y rama, y guardando Provider.
-- Un `Bad Gateway` temporal ocurrió mientras Docker todavía exportaba la imagen;
-  desapareció al finalizar el despliegue.
+1. Gmail SMTP (2FA + contraseña de aplicación) si se quieren recordatorios.
+2. Flujo e2e completo (paciente reserva, QR, saldo) cuando haya tiempo.
+3. Persistencia tras redespliegue (crear dato → redeploy → verificar).
+4. Backup externo diario del volumen + **probar restauración**.
+5. Proteger panel Dokploy (HTTPS, sin HTTP público).
+6. 2FA en GitHub, Hostinger, Google y Dokploy.
+7. Política de privacidad / consentimiento de historias clínicas.
+8. Autodeploy opcional cuando OAuth + backups estén estables.
 
-Pendientes para continuar:
-
-1. Configurar Google OAuth. Crear o usar un proyecto de Google Cloud, registrar
-   el origen `https://sonrident.copaapp.cloud` y la URI
-   `https://sonrident.copaapp.cloud/api/auth/google/callback`. Guardar
-   `GOOGLE_CLIENT_ID` y `GOOGLE_CLIENT_SECRET` solo en Dokploy. Actualmente el
-   portal abre, pero el acceso normal con Google no está disponible.
-2. Configurar Gmail SMTP únicamente después de activar 2FA y crear una
-   contraseña de aplicación. Guardar `SMTP_USER` y `SMTP_PASS` solo en Dokploy.
-3. Probar el flujo real completo: alta del doctor, consultorio, horario,
-   tratamiento, paciente autorizado, reserva, reprogramación, notificación,
-   evidencia QR, validación del pago y saldo.
-4. Verificar persistencia creando datos ficticios, reiniciando o redesplegando y
-   confirmando que SQLite y uploads sobreviven en `sonrident_data`.
-5. Configurar backup externo diario del volumen y probar una restauración.
-6. Proteger el panel de Dokploy con dominio y HTTPS; durante la configuración se
-   accedió por HTTP a `76.13.253.130:3000`.
-7. Confirmar 2FA en GitHub, Hostinger, Google y Dokploy, además de revisar logs,
-   recursos, rate limiting y política de privacidad antes de usar datos reales.
-8. Decidir si activar Autodeploy después de completar y verificar OAuth,
-   persistencia y backups.
-
-Para reanudar, comenzar por el punto 1 de pendientes. No ejecutar `npm run seed`
-en producción y mantener una sola réplica mientras se use SQLite.
+Una sola réplica mientras se use SQLite.
 
 ## Rollback
 

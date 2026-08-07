@@ -13,32 +13,49 @@ let auditedPatient;
 
 before(() => {
   const setup = db.transaction(() => {
-    let clinic = db.prepare(`SELECT id FROM consultorios WHERE email='integration@clinic.test'`).get();
-    if (!clinic) clinic = { id: Number(db.prepare(`INSERT INTO consultorios (nombre,email) VALUES ('Integration Clinic','integration@clinic.test')`).run().lastInsertRowid) };
-    const addUser = db.prepare(`INSERT OR IGNORE INTO usuarios (consultorio_id,email,nombre,rol,estado) VALUES (?,?,?,?,'activo')`);
-    addUser.run(clinic.id, 'integration-doctor@test.local', 'Doctor Integration', 'doctor');
-    addUser.run(clinic.id, 'integration-operative@test.local', 'Operative Integration', 'operativo');
-    addUser.run(clinic.id, 'integration-operative-2@test.local', 'Operative Two', 'operativo');
-    addUser.run(clinic.id, 'integration-patient@test.local', 'Patient Integration', 'paciente');
-    addUser.run(clinic.id, 'admin@test.local', 'Admin Test', 'doctor');
-    const doctor = db.prepare(`SELECT id FROM usuarios WHERE consultorio_id=? AND email='integration-doctor@test.local'`).get(clinic.id);
-    const operative = db.prepare(`SELECT id FROM usuarios WHERE consultorio_id=? AND email='integration-operative@test.local'`).get(clinic.id);
-    const operative2 = db.prepare(`SELECT id FROM usuarios WHERE consultorio_id=? AND email='integration-operative-2@test.local'`).get(clinic.id);
-    const admin = db.prepare(`SELECT id FROM usuarios WHERE consultorio_id=? AND email='admin@test.local'`).get(clinic.id);
-    const patientUser = db.prepare(`SELECT id FROM usuarios WHERE consultorio_id=? AND email='integration-patient@test.local'`).get(clinic.id);
-    let patient = db.prepare(`SELECT id FROM pacientes WHERE consultorio_id=? AND email='integration-patient@test.local'`).get(clinic.id);
-    if (!patient) patient = { id: Number(db.prepare(`INSERT INTO pacientes (consultorio_id,usuario_id,codigo,nombres,apellidos,email)
-      VALUES (?,?,'CLI-I001','Patient','Integration','integration-patient@test.local')`).run(clinic.id, patientUser.id).lastInsertRowid) };
-    let foreignClinic = db.prepare(`SELECT id FROM consultorios WHERE email='foreign@clinic.test'`).get();
-    if (!foreignClinic) foreignClinic = { id: Number(db.prepare(`INSERT INTO consultorios (nombre,email) VALUES ('Foreign Clinic','foreign@clinic.test')`).run().lastInsertRowid) };
-    if (!db.prepare(`SELECT id FROM pacientes WHERE consultorio_id=? AND codigo='CLI-X001'`).get(foreignClinic.id))
-      db.prepare(`INSERT INTO pacientes (consultorio_id,codigo,nombres,apellidos,email) VALUES (?,'CLI-X001','Foreign','Patient','foreign-patient@test.local')`).run(foreignClinic.id);
-    addUser.run(foreignClinic.id, 'foreign-doctor@test.local', 'Foreign Doctor', 'doctor');
-    const foreignDoctor = db.prepare(`SELECT id FROM usuarios WHERE consultorio_id=? AND email='foreign-doctor@test.local'`).get(foreignClinic.id);
-    const foreignPatient = db.prepare(`SELECT id FROM pacientes WHERE consultorio_id=? AND codigo='CLI-X001'`).get(foreignClinic.id);
-    let foreignService = db.prepare(`SELECT id FROM servicios WHERE consultorio_id=? AND nombre='Foreign Service'`).get(foreignClinic.id);
+    const ensureClinic = (nombre, email) => {
+      let clinic = db.prepare(`SELECT id FROM consultorios WHERE email=? AND eliminado_en IS NULL`).get(email);
+      if (!clinic) {
+        clinic = { id: Number(db.prepare(`INSERT INTO consultorios (nombre,email) VALUES (?,?)`).run(nombre, email).lastInsertRowid) };
+      }
+      return clinic;
+    };
+    const ensureUser = (clinicId, email, nombre, rol) => {
+      const existing = db.prepare(`SELECT id FROM usuarios WHERE email=? COLLATE NOCASE`).get(email);
+      if (existing) {
+        db.prepare(`UPDATE usuarios SET consultorio_id=?, nombre=?, rol=?, estado='activo', eliminado_en=NULL WHERE id=?`)
+          .run(clinicId, nombre, rol, existing.id);
+        return existing;
+      }
+      return { id: Number(db.prepare(`INSERT INTO usuarios (consultorio_id,email,nombre,rol,estado) VALUES (?,?,?,?,'activo')`)
+        .run(clinicId, email, nombre, rol).lastInsertRowid) };
+    };
+    const clinic = ensureClinic('Integration Clinic', 'integration@clinic.test');
+    const doctor = ensureUser(clinic.id, 'integration-doctor@test.local', 'Doctor Integration', 'doctor');
+    const operative = ensureUser(clinic.id, 'integration-operative@test.local', 'Operative Integration', 'operativo');
+    const operative2 = ensureUser(clinic.id, 'integration-operative-2@test.local', 'Operative Two', 'operativo');
+    const patientUser = ensureUser(clinic.id, 'integration-patient@test.local', 'Patient Integration', 'paciente');
+    const admin = ensureUser(clinic.id, 'admin@test.local', 'Admin Test', 'doctor');
+    let patient = db.prepare(`SELECT id FROM pacientes WHERE consultorio_id=? AND email='integration-patient@test.local' AND eliminado_en IS NULL`).get(clinic.id);
+    if (!patient) {
+      const archived = db.prepare(`SELECT id FROM pacientes WHERE consultorio_id=? AND email='integration-patient@test.local'`).get(clinic.id);
+      if (archived) {
+        db.prepare(`UPDATE pacientes SET eliminado_en=NULL, usuario_id=?, codigo='CLI-I001' WHERE id=?`).run(patientUser.id, archived.id);
+        patient = archived;
+      } else {
+        patient = { id: Number(db.prepare(`INSERT INTO pacientes (consultorio_id,usuario_id,codigo,nombres,apellidos,email)
+          VALUES (?,?,'CLI-I001','Patient','Integration','integration-patient@test.local')`).run(clinic.id, patientUser.id).lastInsertRowid) };
+      }
+    }
+    const foreignClinic = ensureClinic('Foreign Clinic', 'foreign@clinic.test');
+    let foreignPatient = db.prepare(`SELECT id FROM pacientes WHERE consultorio_id=? AND codigo='CLI-X001' AND eliminado_en IS NULL`).get(foreignClinic.id);
+    if (!foreignPatient) {
+      foreignPatient = { id: Number(db.prepare(`INSERT INTO pacientes (consultorio_id,codigo,nombres,apellidos,email) VALUES (?,'CLI-X001','Foreign','Patient','foreign-patient@test.local')`).run(foreignClinic.id).lastInsertRowid) };
+    }
+    const foreignDoctor = ensureUser(foreignClinic.id, 'foreign-doctor@test.local', 'Foreign Doctor', 'doctor');
+    let foreignService = db.prepare(`SELECT id FROM servicios WHERE consultorio_id=? AND nombre='Foreign Service' AND eliminado_en IS NULL`).get(foreignClinic.id);
     if (!foreignService) foreignService = { id: Number(db.prepare(`INSERT INTO servicios (consultorio_id,nombre,precio_bs,duracion_min) VALUES (?,'Foreign Service',100,30)`).run(foreignClinic.id).lastInsertRowid) };
-    let service = db.prepare(`SELECT id FROM servicios WHERE consultorio_id=? AND nombre='Integration Service'`).get(clinic.id);
+    let service = db.prepare(`SELECT id FROM servicios WHERE consultorio_id=? AND nombre='Integration Service' AND eliminado_en IS NULL`).get(clinic.id);
     if (!service) service = { id: Number(db.prepare(`INSERT INTO servicios (consultorio_id,nombre,precio_bs,duracion_min) VALUES (?,'Integration Service',100,30)`).run(clinic.id).lastInsertRowid) };
     const date = new Date(Date.now() + 7 * 86400000).toISOString().slice(0, 10);
     const weekday = new Date(`${date}T12:00:00Z`).getUTCDay();
