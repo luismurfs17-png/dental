@@ -1,37 +1,40 @@
-import { useEffect } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useEffect, useState } from 'react'
+import { Navigate } from 'react-router-dom'
 import { useAuth } from '../context/AuthContext.jsx'
 import { api } from '../lib/api.js'
+import { homeFor } from './Login.jsx'
 import { Loading } from '../components/UI.jsx'
 
 export default function AuthSuccess() {
-  const { setUser } = useAuth()
-  const navigate = useNavigate()
+  const { user, setUser } = useAuth()
+  const [error, setError] = useState('')
+  const [done, setDone] = useState(false)
 
   useEffect(() => {
+    let active = true
     async function checkSession() {
       try {
         const response = await api('/auth/yo')
-        if (response?.usuario) {
-          setUser(response.usuario)
-          const user = response.usuario
-          const hasClinic = Boolean(user.consultorio_id)
-          if (user.es_admin && !hasClinic) {
-            navigate('/admin', { replace: true })
-          } else if (user.rol === 'doctor' && !hasClinic) {
-            navigate('/crear-consultorio', { replace: true })
-          } else {
-            navigate('/agenda', { replace: true })
-          }
-        } else {
-          navigate('/login', { replace: true })
+        const nextUser = response?.usuario || response
+        if (!active) return
+        if (!nextUser?.id) {
+          setError('No se pudo recuperar la sesión')
+          setDone(true)
+          return
         }
-      } catch (error) {
-        navigate('/login', { replace: true })
+        setUser(nextUser)
+        setDone(true)
+      } catch (requestError) {
+        if (!active) return
+        setError(requestError.message || 'La sesión no es válida')
+        setDone(true)
       }
     }
     checkSession()
-  }, [setUser, navigate])
+    return () => { active = false }
+  }, [setUser])
 
-  return <Loading label="Iniciando sesión..." />
+  if (!done && !user) return <Loading label="Iniciando sesión…" />
+  if (user) return <Navigate to={homeFor(user)} replace />
+  return <Navigate to={`/login?error=${encodeURIComponent(error || 'No se pudo iniciar sesión')}`} replace />
 }

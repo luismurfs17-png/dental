@@ -1,5 +1,5 @@
-import { useState } from 'react'
-import { Navigate } from 'react-router-dom'
+import { useEffect, useState } from 'react'
+import { Navigate, useSearchParams } from 'react-router-dom'
 import { api } from '../lib/api.js'
 import { useAuth } from '../context/AuthContext.jsx'
 import Icon from '../components/Icon.jsx'
@@ -7,11 +7,33 @@ import { Field } from '../components/UI.jsx'
 
 export default function Login() {
   const { user, setUser } = useAuth()
+  const [searchParams] = useSearchParams()
   const [showDev, setShowDev] = useState(false)
   const [form, setForm] = useState({ email: 'doctora@sonrisas.test' })
-  const [error, setError] = useState('')
+  const [error, setError] = useState(searchParams.get('error') || '')
   const [submitting, setSubmitting] = useState(false)
   const isDevelopment = import.meta.env.DEV
+
+  useEffect(() => {
+    const queryError = searchParams.get('error')
+    if (queryError) setError(queryError)
+  }, [searchParams])
+
+  useEffect(() => {
+    if (user) return undefined
+    let active = true
+    async function recoverSession() {
+      try {
+        const response = await api('/auth/yo')
+        const nextUser = response?.usuario || response
+        if (active && nextUser?.id) setUser(nextUser)
+      } catch {
+        // sin sesión
+      }
+    }
+    recoverSession()
+    return () => { active = false }
+  }, [user, setUser])
 
   if (user) return <Navigate to={homeFor(user)} replace />
 
@@ -65,7 +87,7 @@ export default function Login() {
 export function homeFor(user) {
   const role = user?.rol || user?.role
   const hasClinic = Boolean(user?.consultorio || user?.consultorioId || user?.consultorio_id)
-  if (user?.es_admin && !hasClinic) return '/admin'
+  if (user?.es_admin) return hasClinic ? '/agenda' : '/admin'
   if (role === 'doctor' && !hasClinic) return '/crear-consultorio'
   return role === 'paciente' ? '/inicio' : '/agenda'
 }
