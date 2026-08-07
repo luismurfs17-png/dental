@@ -23,70 +23,83 @@ function loginRedirect(res, params = {}) {
   return res.redirect(`${config.clientUrl}/login${suffix}`);
 }
 
+function resolveLoginEstado(user, isAdminEmail) {
+  if (isAdminEmail) return 'activo';
+  if (!user) return 'pendiente';
+  if (user.estado === 'suspendido') throw new ApiError(403, 'El usuario está suspendido');
+  if (user.estado === 'preautorizado' || user.estado === 'activo') return 'activo';
+  if (user.estado === 'pendiente') return 'pendiente';
+  return 'activo';
+}
+
+function bindGoogleUser(userId, { sub, email, name, picture, estado }) {
+  try {
+    db.prepare(`UPDATE usuarios SET google_sub = ?, email = ?, nombre = ?, avatar_url = ?, estado = ?,
+      eliminado_en = NULL, ultimo_acceso_en = CURRENT_TIMESTAMP, actualizado_en = CURRENT_TIMESTAMP WHERE id = ?`)
+      .run(sub, email, name, picture, estado, userId);
+  } catch (error) {
+    if (error.code !== 'SQLITE_CONSTRAINT_UNIQUE') throw error;
+    db.prepare(`UPDATE usuarios SET google_sub = NULL, actualizado_en = CURRENT_TIMESTAMP
+      WHERE google_sub = ? AND id != ?`).run(sub, userId);
+    db.prepare(`UPDATE usuarios SET google_sub = ?, email = ?, nombre = ?, avatar_url = ?, estado = ?,
+      eliminado_en = NULL, ultimo_acceso_en = CURRENT_TIMESTAMP, actualizado_en = CURRENT_TIMESTAMP WHERE id = ?`)
+      .run(sub, email, name, picture, estado, userId);
+  }
+}
+
 function findOrCreateGoogleUser(profile) {
   if (!profile.email_verified) throw new ApiError(401, 'Google no verificó el correo electrónico');
   const email = String(profile.email || '').trim().toLowerCase();
   if (!email) throw new ApiError(401, 'Google no devolvió un correo válido');
   const isAdminEmail = config.adminEmails.includes(email);
+  const name = profile.name || email;
+  const picture = profile.picture || null;
 
-  let user = db.prepare(`SELECT * FROM usuarios WHERE google_sub = ? AND eliminado_en IS NULL`).get(profile.sub);
+  let user = db.prepare(`SELECT * FROM usuarios WHERE google_sub = ? ORDER BY
+    CASE WHEN eliminado_en IS NULL THEN 0 ELSE 1 END, id LIMIT 1`).get(profile.sub);
   if (!user) {
     user = db.prepare(`SELECT * FROM usuarios
-      WHERE email = ? COLLATE NOCASE AND eliminado_en IS NULL
+      WHERE email = ? COLLATE NOCASE
       ORDER BY CASE
-        WHEN google_sub IS NULL AND estado = 'preautorizado' THEN 0
-        WHEN google_sub IS NULL THEN 1
-        ELSE 2
+        WHEN eliminado_en IS NULL AND google_sub IS NULL AND estado = 'preautorizado' THEN 0
+        WHEN eliminado_en IS NULL AND google_sub IS NULL THEN 1
+        WHEN eliminado_en IS NULL THEN 2
+        ELSE 3
       END, id LIMIT 1`).get(email);
   }
 
-  if (user?.estado === 'suspendido') throw new ApiError(403, 'El usuario está suspendido');
+  if (user?.estado === 'suspendido' && !isAdminEmail) {
+    throw new ApiError(403, 'El usuario está suspendido');
+  }
 
   if (user) {
-    const estado = isAdminEmail || user.estado === 'preautorizado' || user.estado === 'activo'
-      ? 'activo'
-      : (user.estado === 'pendiente' ? 'pendiente' : 'activo');
-    try {
-      db.prepare(`UPDATE usuarios SET google_sub = ?, email = ?, nombre = ?, avatar_url = ?, estado = ?,
-        ultimo_acceso_en = CURRENT_TIMESTAMP, actualizado_en = CURRENT_TIMESTAMP WHERE id = ?`)
-        .run(profile.sub, email, profile.name || user.nombre, profile.picture || user.avatar_url, estado, user.id);
-    } catch (error) {
-      if (error.code === 'SQLITE_CONSTRAINT_UNIQUE') {
-        db.prepare(`UPDATE usuarios SET google_sub = NULL, actualizado_en = CURRENT_TIMESTAMP
-          WHERE google_sub = ? AND id != ?`).run(profile.sub, user.id);
-        db.prepare(`UPDATE usuarios SET google_sub = ?, email = ?, nombre = ?, avatar_url = ?, estado = ?,
-          ultimo_acceso_en = CURRENT_TIMESTAMP, actualizado_en = CURRENT_TIMESTAMP WHERE id = ?`)
-          .run(profile.sub, email, profile.name || user.nombre, profile.picture || user.avatar_url, estado, user.id);
-      } else {
-        throw error;
-      }
-    }
+    const estado = resolveLoginEstado(user, isAdminEmail);
+    bindGoogleUser(user.id, { sub: profile.sub, email, name: name || user.nombre, picture: picture || user.avatar_url, estado });
   } else {
-    const estado = isAdminEmail ? 'activo' : 'pendiente';
+    const estado = resolveLoginEstado(null, isAdminEmail);
     try {
       const result = db.prepare(`INSERT INTO usuarios
         (email, nombre, avatar_url, google_sub, rol, estado, ultimo_acceso_en)
         VALUES (?, ?, ?, ?, 'doctor', ?, CURRENT_TIMESTAMP)`)
-        .run(email, profile.name || email, profile.picture || null, profile.sub, estado);
+        .run(email, name, picture, profile.sub, estado);
       user = { id: Number(result.lastInsertRowid) };
     } catch (error) {
-      if (error.code === 'SQLITE_CONSTRAINT_UNIQUE') {
-        user = db.prepare(`SELECT * FROM usuarios WHERE google_sub = ? OR email = ? COLLATE NOCASE
-          AND eliminado_en IS NULL ORDER BY id LIMIT 1`).get(profile.sub, email);
-        if (!user) throw error;
-        const estado = isAdminEmail ? 'activo' : (user.estado === 'pendiente' ? 'pendiente' : 'activo');
-        db.prepare(`UPDATE usuarios SET google_sub = ?, nombre = ?, avatar_url = ?, estado = ?,
-          ultimo_acceso_en = CURRENT_TIMESTAMP, actualizado_en = CURRENT_TIMESTAMP WHERE id = ?`)
-          .run(profile.sub, profile.name || user.nombre, profile.picture || user.avatar_url, estado, user.id);
-      } else {
-        throw error;
-      }
+      if (error.code !== 'SQLITE_CONSTRAINT_UNIQUE') throw error;
+      user = db.prepare(`SELECT * FROM usuarios
+        WHERE (google_sub = ? OR email = ? COLLATE NOCASE)
+        ORDER BY CASE WHEN eliminado_en IS NULL THEN 0 ELSE 1 END, id LIMIT 1`).get(profile.sub, email);
+      if (!user) throw error;
+      const estado = resolveLoginEstado(user, isAdminEmail);
+      bindGoogleUser(user.id, { sub: profile.sub, email, name: name || user.nombre, picture: picture || user.avatar_url, estado });
     }
   }
 
   const fresh = db.prepare(`SELECT id, consultorio_id, email, nombre, avatar_url, rol, estado
-    FROM usuarios WHERE id = ?`).get(user.id);
+    FROM usuarios WHERE id = ? AND eliminado_en IS NULL`).get(user.id);
   if (!fresh) throw new ApiError(500, 'No se pudo cargar el usuario autenticado');
+  if (!['activo', 'pendiente'].includes(fresh.estado)) {
+    throw new ApiError(403, 'El usuario no tiene acceso activo');
+  }
   return withAdminFlag(fresh);
 }
 

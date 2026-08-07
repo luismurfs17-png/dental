@@ -4,26 +4,13 @@ const spanishHandler = (_req, res) => {
   res.status(429).json({ mensaje: 'Demasiadas solicitudes. Intente de nuevo en un momento.' });
 };
 
-export const authLimiter = rateLimit({
-  windowMs: 60_000,
-  max: 30,
+const base = {
   standardHeaders: true,
   legacyHeaders: false,
-  handler: spanishHandler
-});
+  handler: spanishHandler,
+  validate: { xForwardedForHeader: false }
+};
 
-export const adminLimiter = rateLimit({
-  windowMs: 60_000,
-  max: 120,
-  standardHeaders: true,
-  legacyHeaders: false,
-  handler: spanishHandler
-});
-
-export const apiLimiter = rateLimit({
-  windowMs: 60_000,
-  max: 300,
-  standardHeaders: true,
-  legacyHeaders: false,
-  handler: spanishHandler
-});
+export const authLimiter = rateLimit({ ...base, windowMs: 60_000, max: 60 });
+export const adminLimiter = rateLimit({ ...base, windowMs: 60_000, max: 120 });
+export const apiLimiter = rateLimit({ ...base, windowMs: 60_000, max: 300 });

@@ -32,6 +32,7 @@ export function issueSession(res, user) {
     config.jwtSecret,
     { expiresIn: `${config.jwtDays}d` }
   );
+  res.clearCookie(cookieName, { httpOnly: true, secure: config.nodeEnv === 'production', sameSite: 'lax', path: '/' });
   res.cookie(cookieName, token, baseCookieOptions(config.jwtDays * 86400000));
 }
 
@@ -65,11 +66,17 @@ export function authenticate(req, _res, next) {
   try {
     const token = req.cookies?.[cookieName];
     if (!token) throw new ApiError(401, 'Debe iniciar sesión');
-    const payload = jwt.verify(token, config.jwtSecret);
+    let payload;
+    try {
+      payload = jwt.verify(token, config.jwtSecret);
+    } catch {
+      throw new ApiError(401, 'La sesión no es válida o expiró');
+    }
     const user = db.prepare(`SELECT id, consultorio_id, email, nombre, avatar_url, rol, estado
       FROM usuarios WHERE id = ? AND eliminado_en IS NULL`).get(Number(payload.sub));
-    if (!user || !['activo', 'pendiente'].includes(user.estado)) {
-      throw new ApiError(401, 'La sesión no es válida');
+    if (!user) throw new ApiError(401, 'La sesión no es válida');
+    if (!['activo', 'pendiente'].includes(user.estado)) {
+      throw new ApiError(401, 'La cuenta no está activa. Contacte al administrador.');
     }
     req.user = withAdminFlag(user);
     next();

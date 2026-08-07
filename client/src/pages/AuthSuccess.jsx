@@ -12,7 +12,7 @@ export default function AuthSuccess() {
 
   useEffect(() => {
     let active = true
-    async function checkSession() {
+    async function checkSession(attempt = 0) {
       try {
         const response = await api('/auth/yo')
         const nextUser = response?.usuario || response
@@ -26,6 +26,11 @@ export default function AuthSuccess() {
         setDone(true)
       } catch (requestError) {
         if (!active) return
+        if (attempt < 2) {
+          await new Promise((resolve) => setTimeout(resolve, 250 * (attempt + 1)))
+          if (!active) return
+          return checkSession(attempt + 1)
+        }
         setError(requestError.message || 'La sesión no es válida')
         setDone(true)
       }
