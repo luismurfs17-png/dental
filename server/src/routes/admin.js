@@ -263,7 +263,7 @@ router.post('/invitaciones', asyncRoute(async (req, res) => {
   required(req.body, ['email']);
   const email = String(req.body.email).trim().toLowerCase();
   if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) throw new ApiError(400, 'Correo inválido');
-  if (config.adminEmails.includes(email)) throw new ApiError(400, 'Ese correo pertenece al administrador');
+  if (config.adminEmails.includes(email)) throw new ApiError(400, 'Ese correo es del administrador; inicie sesión con él para crear su consultorio directamente');
   const existing = db.prepare(`SELECT id, consultorio_id, estado FROM usuarios
     WHERE email = ? COLLATE NOCASE AND eliminado_en IS NULL ORDER BY id LIMIT 1`).get(email);
   if (existing) {
