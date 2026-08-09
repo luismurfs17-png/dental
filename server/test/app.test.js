@@ -296,6 +296,27 @@ test('código de paciente es numérico, manual, único por consultorio y prioriz
   auditedPatient = { id: exact.body.paciente.id, code: leadingZeroCode, foreignId: foreign.body.paciente.id };
 });
 
+test('volver a crear un paciente con un correo archivado reactiva la ficha y la cuenta', async () => {
+  const doctor = request.agent(app);
+  await doctor.post('/api/auth/desarrollo').send({ email: 'integration-doctor@test.local' }).expect(200);
+  const codigo = `${Date.now()}${Math.floor(Math.random() * 1000).toString().padStart(3, '0')}`;
+  const email = `reuso-${codigo}@test.local`;
+
+  const first = await doctor.post('/api/pacientes').send({ codigo, nombres: 'Reutilizable', apellidos: 'Correo', email }).expect(201);
+  const firstId = first.body.paciente.id;
+  const firstUserId = first.body.paciente.usuario_id;
+  assert.ok(firstUserId);
+
+  await doctor.delete(`/api/pacientes/${firstId}`).expect(200);
+  assert.ok(db.prepare('SELECT eliminado_en FROM pacientes WHERE id=?').get(firstId).eliminado_en);
+
+  const again = await doctor.post('/api/pacientes').send({ codigo, nombres: 'Reutilizado', apellidos: 'Correo', email }).expect(201);
+  assert.equal(again.body.paciente.id, firstId);
+  assert.equal(again.body.paciente.usuario_id, firstUserId);
+  assert.equal(again.body.paciente.nombres, 'Reutilizado');
+  assert.ok(!db.prepare('SELECT eliminado_en FROM usuarios WHERE id=?').get(firstUserId).eliminado_en);
+});
+
 test('auditoría filtra con alcance de consultorio y enriquece pacientes archivados', async () => {
   const doctor = request.agent(app);
   await doctor.post('/api/auth/desarrollo').send({ email: 'integration-doctor@test.local' }).expect(200);

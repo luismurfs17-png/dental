@@ -202,22 +202,49 @@ router.post('/pacientes', allowRoles('doctor', 'operativo'), (req, res) => {
     const patientId = db.transaction(() => {
       let userId = null;
       if (req.body.email) {
+        const email = String(req.body.email).trim();
         const existing = db.prepare(`SELECT id, rol FROM usuarios WHERE consultorio_id=? AND email=? COLLATE NOCASE AND eliminado_en IS NULL`)
-          .get(tenant(req), req.body.email.trim());
+          .get(tenant(req), email);
         if (existing && existing.rol !== 'paciente') throw new ApiError(409, 'El correo pertenece a un usuario interno');
         if (existing) userId = existing.id;
-        else userId = db.prepare(`INSERT INTO usuarios (consultorio_id,email,nombre,rol,estado) VALUES (?,?,?,'paciente','preautorizado')`)
-          .run(tenant(req), req.body.email.trim(), `${req.body.nombres} ${req.body.apellidos}`).lastInsertRowid;
+        else {
+          const archivado = db.prepare(`SELECT id FROM usuarios WHERE consultorio_id=? AND email=? COLLATE NOCASE AND eliminado_en IS NOT NULL ORDER BY id LIMIT 1`)
+            .get(tenant(req), email);
+          if (archivado) {
+            db.prepare(`UPDATE usuarios SET rol='paciente', estado='preautorizado', nombre=?, google_sub=NULL,
+              eliminado_en=NULL, actualizado_en=CURRENT_TIMESTAMP WHERE id=?`)
+              .run(`${req.body.nombres} ${req.body.apellidos}`, archivado.id);
+            userId = archivado.id;
+          } else {
+            userId = db.prepare(`INSERT INTO usuarios (consultorio_id,email,nombre,rol,estado) VALUES (?,?,?,'paciente','preautorizado')`)
+              .run(tenant(req), email, `${req.body.nombres} ${req.body.apellidos}`).lastInsertRowid;
+          }
+        }
       }
-      const result = db.prepare(`INSERT INTO pacientes
-        (consultorio_id,usuario_id,codigo,nombres,apellidos,email,telefono,fecha_nacimiento,sexo,documento,direccion,
-         contacto_emergencia,telefono_emergencia,alergias,antecedentes,medicamentos,notas)
-        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(tenant(req), userId, code, req.body.nombres,
-        req.body.apellidos, req.body.email || null, req.body.telefono || null, req.body.fecha_nacimiento || null,
-        req.body.sexo || null, req.body.documento || null, req.body.direccion || null, req.body.contacto_emergencia || null,
-        req.body.telefono_emergencia || null, req.body.alergias || null, req.body.antecedentes || null,
-        req.body.medicamentos || null, req.body.notas || null);
-      return result.lastInsertRowid;
+      const archivedPatient = req.body.email ? db.prepare(`SELECT id, usuario_id, codigo FROM pacientes
+        WHERE consultorio_id=? AND email=? COLLATE NOCASE AND eliminado_en IS NOT NULL ORDER BY id LIMIT 1`)
+        .get(tenant(req), String(req.body.email).trim()) : null;
+      let patientId;
+      if (archivedPatient) {
+        db.prepare(`UPDATE pacientes SET codigo=?, nombres=?, apellidos=?, email=?, telefono=?, fecha_nacimiento=?, sexo=?, documento=?,
+          direccion=?, contacto_emergencia=?, telefono_emergencia=?, alergias=?, antecedentes=?, medicamentos=?, notas=?,
+          usuario_id=COALESCE(?, usuario_id), eliminado_en=NULL, actualizado_en=CURRENT_TIMESTAMP WHERE id=?`)
+          .run(code, req.body.nombres, req.body.apellidos, req.body.email || null, req.body.telefono || null,
+            req.body.fecha_nacimiento || null, req.body.sexo || null, req.body.documento || null, req.body.direccion || null,
+            req.body.contacto_emergencia || null, req.body.telefono_emergencia || null, req.body.alergias || null,
+            req.body.antecedentes || null, req.body.medicamentos || null, req.body.notas || null, userId, archivedPatient.id);
+        patientId = archivedPatient.id;
+      } else {
+        patientId = db.prepare(`INSERT INTO pacientes
+          (consultorio_id,usuario_id,codigo,nombres,apellidos,email,telefono,fecha_nacimiento,sexo,documento,direccion,
+           contacto_emergencia,telefono_emergencia,alergias,antecedentes,medicamentos,notas)
+          VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(tenant(req), userId, code, req.body.nombres,
+          req.body.apellidos, req.body.email || null, req.body.telefono || null, req.body.fecha_nacimiento || null,
+          req.body.sexo || null, req.body.documento || null, req.body.direccion || null, req.body.contacto_emergencia || null,
+          req.body.telefono_emergencia || null, req.body.alergias || null, req.body.antecedentes || null,
+          req.body.medicamentos || null, req.body.notas || null).lastInsertRowid;
+      }
+      return patientId;
     })();
     log(req, 'crear', 'paciente', patientId, { codigo: code, nombres: req.body.nombres, apellidos: req.body.apellidos }, patientId);
     const patient = db.prepare('SELECT * FROM pacientes WHERE id=? AND consultorio_id=?').get(patientId, tenant(req));
