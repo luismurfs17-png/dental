@@ -47,7 +47,7 @@ function bindGoogleUser(userId, { sub, email, name, picture, estado }) {
   }
 }
 
-function findOrCreateGoogleUser(profile) {
+export function findOrCreateGoogleUser(profile) {
   if (!profile.email_verified) throw new ApiError(401, 'Google no verificó el correo electrónico');
   const email = String(profile.email || '').trim().toLowerCase();
   if (!email) throw new ApiError(401, 'Google no devolvió un correo válido');
@@ -73,6 +73,20 @@ function findOrCreateGoogleUser(profile) {
   }
 
   if (user) {
+    if (isAdminEmail && user.rol === 'paciente') {
+      const doctor = db.prepare(`SELECT * FROM usuarios
+        WHERE email = ? COLLATE NOCASE AND rol IN ('doctor','operativo') AND eliminado_en IS NULL
+        ORDER BY id LIMIT 1`).get(email);
+      if (doctor) {
+        user = doctor;
+        console.log(`Superadmin ${email}: se usará la cuenta doctor #${doctor.id} (consultorio ${doctor.consultorio_id})`);
+      } else {
+        db.prepare(`UPDATE usuarios SET rol = 'doctor', actualizado_en = CURRENT_TIMESTAMP WHERE id = ?`)
+          .run(user.id);
+        user.rol = 'doctor';
+        console.log(`Superadmin ${email} promovido de paciente a doctor (id=${user.id})`);
+      }
+    }
     const estado = resolveLoginEstado(user, isAdminEmail);
     bindGoogleUser(user.id, { sub: profile.sub, email, name: name || user.nombre, picture: picture || user.avatar_url, estado });
   } else {

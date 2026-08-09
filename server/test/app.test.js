@@ -440,3 +440,25 @@ test('solo con invitación se puede crear un consultorio', async (t) => {
   const active = db.prepare('SELECT estado, consultorio_id FROM usuarios WHERE id=?').get(invitedId);
   assert.equal(active.estado, 'activo');
 });
+
+test('un superadmin que tenía rol paciente recupera el portal de doctor', async (t) => {
+  const { findOrCreateGoogleUser } = await import('../src/routes/auth.js');
+  const clinic = db.prepare(`SELECT id FROM consultorios WHERE email='foreign@clinic.test'`).get();
+  const existing = db.prepare(`SELECT id FROM usuarios WHERE email='admin@test.local' AND consultorio_id=?`).get(clinic.id);
+  const userId = existing?.id || Number(db.prepare(`INSERT INTO usuarios (consultorio_id,email,nombre,rol,estado) VALUES (?,?,?,'paciente','activo')`)
+    .run(clinic.id, 'admin@test.local', 'Admin Paciente').lastInsertRowid);
+  db.prepare(`UPDATE usuarios SET rol='paciente', estado='activo', google_sub=NULL, eliminado_en=NULL WHERE id=?`).run(userId);
+  t.after(() => db.prepare('UPDATE usuarios SET eliminado_en=CURRENT_TIMESTAMP WHERE id=?').run(userId));
+
+  const user = findOrCreateGoogleUser({
+    sub: `sub-admin-${userId}`,
+    email: 'admin@test.local',
+    email_verified: true,
+    name: 'Admin Paciente'
+  });
+  assert.equal(user.rol, 'doctor');
+  assert.equal(user.es_admin, true);
+  const row = db.prepare('SELECT rol, google_sub FROM usuarios WHERE id=?').get(user.id);
+  assert.equal(row.rol, 'doctor');
+  assert.equal(row.google_sub, `sub-admin-${userId}`);
+});
