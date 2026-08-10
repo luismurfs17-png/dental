@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import { createPortal } from 'react-dom'
 import { NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom'
 import { api } from '../lib/api.js'
 import { useAuth } from '../context/AuthContext.jsx'
@@ -83,7 +84,7 @@ export default function AppShell() {
         {mobileItems.map((item) => <NavItem key={item.to} item={item} mobile />)}
         {!isPatient && <button className="mobile-more" onClick={() => setMobileMenu(true)}><span className="nav-icon"><Icon name="menu" size={21} /></span><span>Más</span></button>}
       </nav>
-      {mobileMenu && <div className="mobile-menu-backdrop" onMouseDown={(event) => event.target === event.currentTarget && setMobileMenu(false)}><section className="mobile-menu" role="dialog" aria-modal="true" aria-label="Menú de navegación"><header><div><small>SONRIDENT</small><strong>{user?.nombre || 'Usuario'}</strong></div><button className="icon-button" onClick={() => setMobileMenu(false)} aria-label="Cerrar menú"><Icon name="close" /></button></header><nav>{navItems.map((item) => <NavItem key={item.to} item={item} />)}</nav><button className="mobile-logout" onClick={logout}><Icon name="logout" /> Cerrar sesión</button></section></div>}
+      {mobileMenu && createPortal(<div className="mobile-menu-backdrop" onClick={(event) => event.target === event.currentTarget && setMobileMenu(false)}><section className="mobile-menu" role="dialog" aria-modal="true" aria-label="Menú de navegación"><header><div><small>SONRIDENT</small><strong>{user?.nombre || 'Usuario'}</strong></div><button className="icon-button" onClick={() => setMobileMenu(false)} aria-label="Cerrar menú"><Icon name="close" /></button></header><nav>{navItems.map((item) => <NavItem key={item.to} item={item} />)}</nav><button className="mobile-logout" onClick={logout}><Icon name="logout" /> Cerrar sesión</button></section></div>, document.body)}
     </div>
   )
 }

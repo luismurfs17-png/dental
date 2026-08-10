@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import { createPortal } from 'react-dom'
 import Icon from './Icon.jsx'
 
 export function PageHeader({ eyebrow, title, description, action, children }) {
@@ -55,19 +56,20 @@ export function StatusPill({ status = '' }) {
 }
 
 export function Modal({ title, onClose, children }) {
-  return (
-    <div className="modal-backdrop" role="presentation" onMouseDown={(event) => event.target === event.currentTarget && onClose()}>
+  return createPortal(
+    <div className="modal-backdrop" role="presentation" onClick={(event) => event.target === event.currentTarget && onClose()}>
       <section className="modal" role="dialog" aria-modal="true" aria-label={title}>
         <div className="modal-head"><h2>{title}</h2><button className="icon-button" onClick={onClose} aria-label="Cerrar"><Icon name="close" /></button></div>
         {children}
       </section>
-    </div>
+    </div>,
+    document.body,
   )
 }
 
 export function Toast({ message, type = 'success', onClose }) {
   if (!message) return null
-  return <div className={`toast toast-${type}`}><Icon name={type === 'success' ? 'check' : 'close'} /><span>{message}</span><button onClick={onClose} aria-label="Cerrar"><Icon name="close" size={16} /></button></div>
+  return createPortal(<div className={`toast toast-${type}`}><Icon name={type === 'success' ? 'check' : 'close'} /><span>{message}</span><button onClick={onClose} aria-label="Cerrar"><Icon name="close" size={16} /></button></div>, document.body)
 }
 
 export function Field({ label, hint, children }) {
