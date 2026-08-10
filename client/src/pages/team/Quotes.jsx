@@ -165,7 +165,8 @@ export function ShareQuoteModal({ detail, onClose, onShared }) {
   const waNumber = telefono ? (telefono.startsWith('591') ? telefono : `591${telefono.replace(/^0/, '')}`) : ''
   const total = formatMoney(detail.resumen?.total_bs || 0)
   const price = detail.resumen?.sin_precio > 0 ? `Total publicado: ${total} + servicios por definir.` : `Total cotizado: ${total}.`
-  const waLink = `https://wa.me/${waNumber}?text=${encodeURIComponent(`Hola ${detail.nombres}, aquí tienes tu cotización. ${price} Puedes revisar el detalle aquí: ${url}`)}`
+  const payment = detail.pago?.pagado_bs > 0 ? ` Pagado a cuenta: ${formatMoney(detail.pago.pagado_bs)}. Saldo: ${formatMoney(detail.pago.saldo_bs)}.` : ''
+  const waLink = `https://wa.me/${waNumber}?text=${encodeURIComponent(`Hola ${detail.nombres}, aquí tienes tu cotización. ${price}${payment} Puedes revisar el detalle aquí: ${url}`)}`
 
   async function copy() {
     try {
@@ -293,7 +294,7 @@ export default function Quotes() {
               </header>
               <div className="quote-card-body">
                 <h3>{quoteItem.titulo || 'Plan de tratamiento'}</h3>
-                <p>{quoteItem.resumen.total_items} servicio(s){quoteItem.resumen.sin_precio > 0 ? ` · ${quoteItem.resumen.sin_precio} sin precio` : ''}</p>
+                <p>{quoteItem.resumen.total_items} servicio(s){quoteItem.resumen.sin_precio > 0 ? ` · ${quoteItem.resumen.sin_precio} sin precio` : ''}{quoteItem.pago?.pagado_bs > 0 ? ` · Pagado ${formatMoney(quoteItem.pago.pagado_bs)} · Saldo ${formatMoney(quoteItem.pago.saldo_bs)}` : ''}</p>
               </div>
               <footer>
                 <strong className={quoteItem.resumen.sin_precio > 0 ? 'coral-text' : ''}>

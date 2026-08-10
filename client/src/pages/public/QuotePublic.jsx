@@ -62,6 +62,9 @@ export default function QuotePublic() {
               </div>
               <div className="quote-totals">
                 <div><small>Total cotizado</small><strong>{formatMoney(data.cotizacion.total_bs)}</strong></div>
+                {data.cotizacion.pago?.pagado_bs > 0 && <div><small>Pagado a cuenta</small><strong>{formatMoney(data.cotizacion.pago.pagado_bs)}</strong></div>}
+                {data.cotizacion.pago?.saldo_bs > 0 && <div><small>Saldo pendiente</small><strong>{formatMoney(data.cotizacion.pago.saldo_bs)}</strong></div>}
+                {data.cotizacion.pago?.estado === 'pagado' && <p>Esta cotización está totalmente pagada.</p>}
                 {data.cotizacion.sin_precio > 0 && <p>{data.cotizacion.sin_precio} servicio(s) sin precio · se definen en consulta</p>}
               </div>
               {data.cotizacion.notas && <p className="quote-notes">{data.cotizacion.notas}</p>}

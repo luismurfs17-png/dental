@@ -37,9 +37,10 @@ router.get('/presupuestos/publico/:token', (req, res) => {
       compartido_en: quote.compartido_en,
       visto_en: quote.visto_en,
       items,
-      total_bs: quoteSummary(quote.id).total_bs,
-      sin_precio: quoteSummary(quote.id).sin_precio,
-    },
+       total_bs: quoteSummary(quote.id).total_bs,
+       sin_precio: quoteSummary(quote.id).sin_precio,
+       pago: quotePayments(quote.id),
+     },
     paciente: { codigo: quote.codigo, nombres: quote.nombres, apellidos: quote.apellidos },
     consultorio: { nombre: quote.consultorio, telefono: quote.consultorio_telefono },
   });
