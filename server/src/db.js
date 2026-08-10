@@ -31,7 +31,9 @@ ensureColumn('registros_clinicos', 'creado_por', 'INTEGER REFERENCES usuarios(id
 ensureColumn('registros_clinicos', 'validado_por', 'INTEGER REFERENCES usuarios(id)');
 ensureColumn('registros_clinicos', 'validado_en', 'TEXT');
 ensureColumn('auditoria', 'paciente_id', 'INTEGER REFERENCES pacientes(id)');
+ensureColumn('pagos', 'presupuesto_id', 'INTEGER REFERENCES presupuestos(id)');
 db.exec('CREATE INDEX IF NOT EXISTS idx_auditoria_paciente ON auditoria(consultorio_id, paciente_id, creado_en)');
+db.exec('CREATE INDEX IF NOT EXISTS idx_pagos_presupuesto ON pagos(consultorio_id, presupuesto_id, estado, eliminado_en)');
 
 makeColumnNullable('servicios', 'precio_bs', 'REAL');
 makeColumnNullable('citas', 'precio_bs', 'REAL');

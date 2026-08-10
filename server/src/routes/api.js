@@ -509,6 +509,13 @@ const quoteSummary = (quoteId) => db.prepare(`SELECT
     COALESCE(SUM(CASE WHEN precio_bs IS NULL THEN 0 ELSE precio_bs * cantidad END), 0) total_bs,
     COALESCE(SUM(CASE WHEN precio_bs IS NULL THEN 1 ELSE 0 END), 0) sin_precio
   FROM presupuesto_items WHERE presupuesto_id=? AND eliminado_en IS NULL`).get(quoteId);
+const quotePayments = (quoteId) => {
+  const total = Number(quoteSummary(quoteId).total_bs || 0);
+  const paid = Number(db.prepare(`SELECT COALESCE(SUM(monto_bs),0) total FROM pagos
+    WHERE presupuesto_id=? AND estado='valido' AND eliminado_en IS NULL`).get(quoteId).total || 0);
+  return { total_bs: total, pagado_bs: paid, saldo_bs: Math.max(0, total - paid),
+    estado: total <= 0 ? 'sin_precio' : paid >= total ? 'pagado' : paid > 0 ? 'saldo' : 'pendiente' };
+};
 
 const newQuoteToken = () => randomBytes(24).toString('base64url');
 const ensureQuoteToken = (quoteId) => {
@@ -548,17 +555,29 @@ router.post('/presupuestos/:id/compartir', allowRoles('doctor', 'operativo'), (r
     .get(quoteId, tenant(req));
   if (!quote) throw new ApiError(404, 'Presupuesto no encontrado');
   const token = ensureQuoteToken(quoteId);
+  const newlyShared = !quote.compartido_en;
   if (!quote.compartido_en) {
     db.prepare(`UPDATE presupuestos SET compartido_en=CURRENT_TIMESTAMP WHERE id=?`).run(quoteId);
+  }
+  const patientUser = db.prepare(`SELECT usuario_id FROM pacientes WHERE id=? AND consultorio_id=?`).get(quote.paciente_id, tenant(req));
+  if (newlyShared && patientUser?.usuario_id) {
+    const summary = quoteSummary(quoteId);
+    const price = summary.sin_precio > 0 ? `Total publicado: Bs ${summary.total_bs} + servicios por definir.` : `Total cotizado: Bs ${summary.total_bs}.`;
+    db.prepare(`INSERT INTO notificaciones (consultorio_id,usuario_id,tipo,titulo,mensaje,entidad_tipo,entidad_id)
+      VALUES (?,?,'cotizacion_compartida','Cotización disponible',?,'presupuesto',?)`).run(tenant(req), patientUser.usuario_id,
+      `Tu cotización está disponible. ${price}`, quoteId);
   }
   log(req, 'compartir', 'presupuesto', quoteId, { paciente_id: quote.paciente_id }, quote.paciente_id);
   res.json({ mensaje: 'Enlace público listo para compartir', public_token: token, compartido_en: quote.compartido_en });
 });
 
-router.get('/presupuestos', allowRoles('doctor', 'operativo'), (req, res) => {
+router.get('/presupuestos', allowRoles('doctor', 'operativo', 'paciente'), (req, res) => {
   const conditions = ['pr.consultorio_id=?', 'pr.eliminado_en IS NULL'];
   const values = [tenant(req)];
-  if (req.query.paciente_id) { conditions.push('pr.paciente_id=?'); values.push(id(req.query.paciente_id)); }
+  if (req.user.rol === 'paciente') {
+    conditions.push('pr.paciente_id=?', `pr.estado IN ('entregado','aceptado')`, 'pr.compartido_en IS NOT NULL');
+    values.push(patientForUser(req));
+  } else if (req.query.paciente_id) { conditions.push('pr.paciente_id=?'); values.push(id(req.query.paciente_id)); }
   if (req.query.estado) {
     if (!QUOTE_STATES.includes(req.query.estado)) throw new ApiError(400, 'Estado de presupuesto inválido');
     conditions.push('pr.estado=?'); values.push(req.query.estado);
@@ -569,7 +588,7 @@ router.get('/presupuestos', allowRoles('doctor', 'operativo'), (req, res) => {
     JOIN usuarios u ON u.id=pr.creado_por AND u.consultorio_id=pr.consultorio_id
     WHERE ${conditions.join(' AND ')} ORDER BY pr.creado_en DESC LIMIT 500`).all(...values);
   for (const row of rows) row.public_token = ensureQuoteToken(row.id);
-  res.json({ presupuestos: rows.map((row) => ({ ...row, resumen: quoteSummary(row.id) })) });
+  res.json({ presupuestos: rows.map((row) => ({ ...row, resumen: quoteSummary(row.id), pago: quotePayments(row.id) })) });
 });
 router.post('/presupuestos', allowRoles('doctor', 'operativo'), (req, res) => {
   required(req.body, ['paciente_id']);
@@ -590,20 +609,23 @@ router.post('/presupuestos', allowRoles('doctor', 'operativo'), (req, res) => {
   log(req, 'crear', 'presupuesto', quoteId, { paciente_id: patientId, titulo: req.body.titulo, items: items.map((item) => ({ nombre: item.name, precio_bs: item.price })) }, patientId);
   res.status(201).json({ mensaje: 'Presupuesto creado correctamente', id: quoteId });
 });
-router.get('/presupuestos/:id', allowRoles('doctor', 'operativo'), (req, res) => {
+router.get('/presupuestos/:id', allowRoles('doctor', 'operativo', 'paciente'), (req, res) => {
   const quoteId = id(req.params.id);
   const quote = db.prepare(`SELECT pr.*,p.codigo,p.nombres,p.apellidos,p.telefono,u.nombre creado_por_nombre
     FROM presupuestos pr
     JOIN pacientes p ON p.id=pr.paciente_id AND p.consultorio_id=pr.consultorio_id
     JOIN usuarios u ON u.id=pr.creado_por AND u.consultorio_id=pr.consultorio_id
-    WHERE pr.id=? AND pr.consultorio_id=? AND pr.eliminado_en IS NULL`).get(quoteId, tenant(req));
+    WHERE pr.id=? AND pr.consultorio_id=? AND pr.eliminado_en IS NULL
+      AND (? <> 'paciente' OR (pr.paciente_id=? AND pr.estado IN ('entregado','aceptado') AND pr.compartido_en IS NOT NULL))`).get(
+        quoteId, tenant(req), req.user.rol, req.user.rol === 'paciente' ? patientForUser(req) : 0);
   if (!quote) throw new ApiError(404, 'Presupuesto no encontrado');
   const items = db.prepare(`SELECT * FROM presupuesto_items WHERE presupuesto_id=? AND eliminado_en IS NULL ORDER BY posicion,id`).all(quoteId);
   const publicToken = ensureQuoteToken(quoteId);
   res.json({
     presupuesto: {
       ...quote,
-      resumen: quoteSummary(quoteId),
+       resumen: quoteSummary(quoteId),
+       pago: quotePayments(quoteId),
       items,
       timeline: quoteTimeline(quoteId),
       public_token: publicToken,
@@ -622,6 +644,16 @@ router.patch('/presupuestos/:id', allowRoles('doctor', 'operativo'), (req, res) 
       quoteId, tenant(req));
     if (items !== null) replaceQuoteItems(quoteId, tenant(req), items);
   })();
+  if (current.compartido_en) {
+    const patientUser = db.prepare(`SELECT usuario_id FROM pacientes WHERE id=? AND consultorio_id=?`).get(current.paciente_id, tenant(req));
+    if (patientUser?.usuario_id) {
+      const summary = quoteSummary(quoteId);
+      const price = summary.sin_precio > 0 ? `Total publicado: Bs ${summary.total_bs} + servicios por definir.` : `Nuevo total cotizado: Bs ${summary.total_bs}.`;
+      db.prepare(`INSERT INTO notificaciones (consultorio_id,usuario_id,tipo,titulo,mensaje,entidad_tipo,entidad_id)
+        VALUES (?,?,'cotizacion_actualizada','Cotización actualizada',?,'presupuesto',?)`).run(tenant(req), patientUser.usuario_id,
+        `El doctor actualizó tu cotización. ${price}`, quoteId);
+    }
+  }
   const auditData = items !== null
     ? { ...(req.body.titulo !== undefined ? { titulo: req.body.titulo } : {}), items: items.map((item) => ({ nombre: item.name, precio_bs: item.price })) }
     : { ...(req.body.titulo !== undefined ? { titulo: req.body.titulo } : {}) };
@@ -958,9 +990,11 @@ router.get('/pagos', (req, res) => {
     conditions.push('pg.paciente_id=?'); values.push(id(req.query.paciente_id));
   }
   if (req.query.estado) { conditions.push('pg.estado=?'); values.push(req.query.estado); }
-  const rows = db.prepare(`SELECT pg.*,p.codigo,p.nombres,p.apellidos,u.nombre registrado_por_nombre
+  const rows = db.prepare(`SELECT pg.*,p.codigo,p.nombres,p.apellidos,u.nombre registrado_por_nombre,
+      pr.titulo presupuesto_titulo
     FROM pagos pg JOIN pacientes p ON p.id=pg.paciente_id AND p.consultorio_id=pg.consultorio_id
     JOIN usuarios u ON u.id=pg.registrado_por AND u.consultorio_id=pg.consultorio_id
+    LEFT JOIN presupuestos pr ON pr.id=pg.presupuesto_id AND pr.consultorio_id=pg.consultorio_id
     WHERE ${conditions.join(' AND ')} ORDER BY pg.creado_en DESC LIMIT 500`).all(...values);
   res.json({ pagos: rows.map((row) => {
     const { evidencia_path: evidencePath, ...payment } = row;
@@ -985,12 +1019,23 @@ router.post('/pagos', upload.single('evidencia'), (req, res, next) => {
         .get(appointmentId, patientId, tenant(req));
       if (!appointment) throw new ApiError(400, 'La cita no corresponde al paciente');
     }
+    let quoteId = null;
+    if (req.body.presupuesto_id) {
+      quoteId = id(req.body.presupuesto_id);
+      const quote = db.prepare(`SELECT id FROM presupuestos WHERE id=? AND paciente_id=? AND consultorio_id=? AND eliminado_en IS NULL`)
+        .get(quoteId, patientId, tenant(req));
+      if (!quote) throw new ApiError(400, 'La cotización no corresponde al paciente');
+    }
     const state = req.body.metodo === 'qr' ? 'por_verificar' : 'valido';
     const evidence = req.file ? req.file.filename : null;
     const result = db.prepare(`INSERT INTO pagos
-      (consultorio_id,paciente_id,cita_id,monto_bs,metodo,estado,evidencia_path,referencia,registrado_por)
-      VALUES (?,?,?,?,?,?,?,?,?)`).run(tenant(req), patientId, appointmentId, positiveNumber(req.body.monto_bs, 'monto_bs'),
+      (consultorio_id,paciente_id,cita_id,presupuesto_id,monto_bs,metodo,estado,evidencia_path,referencia,registrado_por)
+      VALUES (?,?,?,?,?,?,?,?,?,?)`).run(tenant(req), patientId, appointmentId, quoteId, positiveNumber(req.body.monto_bs, 'monto_bs'),
       req.body.metodo, state, evidence, req.body.referencia || null, req.user.id);
+    const patientUser = db.prepare(`SELECT usuario_id FROM pacientes WHERE id=? AND consultorio_id=?`).get(patientId, tenant(req));
+    if (patientUser?.usuario_id) db.prepare(`INSERT INTO notificaciones (consultorio_id,usuario_id,tipo,titulo,mensaje,entidad_tipo,entidad_id)
+      VALUES (?,?,'pago_actualizado','Pago registrado',?,'pago',?)`).run(tenant(req), patientUser.usuario_id,
+      state === 'valido' ? 'El consultorio registró tu pago y tu saldo fue actualizado.' : 'Tu comprobante QR fue enviado para verificación.', result.lastInsertRowid);
     log(req, 'crear', 'pago', result.lastInsertRowid, { paciente_id: patientId, monto_bs: req.body.monto_bs, metodo: req.body.metodo, estado: state }, patientId);
     res.status(201).json({ mensaje: state === 'por_verificar' ? 'Pago QR enviado para verificación' : 'Pago registrado correctamente', id: result.lastInsertRowid, estado: state });
   } catch (error) {
@@ -1016,6 +1061,11 @@ router.patch('/pagos/:id/verificacion', allowRoles('doctor'), (req, res) => {
     WHERE id=? AND consultorio_id=? AND metodo='qr' AND estado='por_verificar' AND eliminado_en IS NULL`)
     .run(req.body.estado, req.user.id, paymentId, tenant(req));
   ensureFound(result, 'Pago QR pendiente no encontrado');
+  const patientUser = db.prepare(`SELECT p.usuario_id FROM pagos pg JOIN pacientes p ON p.id=pg.paciente_id
+    AND p.consultorio_id=pg.consultorio_id WHERE pg.id=? AND pg.consultorio_id=?`).get(paymentId, tenant(req));
+  if (patientUser?.usuario_id) db.prepare(`INSERT INTO notificaciones (consultorio_id,usuario_id,tipo,titulo,mensaje,entidad_tipo,entidad_id)
+    VALUES (?,?,'pago_actualizado','Pago QR actualizado',?,'pago',?)`).run(tenant(req), patientUser.usuario_id,
+    req.body.estado === 'valido' ? 'Tu pago QR fue validado y tu saldo fue actualizado.' : 'Tu pago QR fue anulado.', paymentId);
   log(req, 'verificar', 'pago', paymentId, { estado: req.body.estado }, payment.paciente_id);
   res.json({ mensaje: req.body.estado === 'valido' ? 'Pago QR validado correctamente' : 'Pago QR anulado correctamente' });
 });
@@ -1040,14 +1090,22 @@ router.get('/saldos', (req, res) => {
     conditions.push('p.id=?'); values.push(id(req.query.paciente_id));
   }
   const rows = db.prepare(`SELECT p.id paciente_id,p.codigo,p.nombres,p.apellidos,
-    COALESCE((SELECT SUM(c.precio_bs) FROM citas c WHERE c.consultorio_id=p.consultorio_id AND c.paciente_id=p.id
-      AND c.estado='atendida' AND c.eliminado_en IS NULL),0) cargos_bs,
-    COALESCE((SELECT SUM(pg.monto_bs) FROM pagos pg WHERE pg.consultorio_id=p.consultorio_id AND pg.paciente_id=p.id
-      AND pg.estado='valido' AND pg.eliminado_en IS NULL),0) pagos_validos_bs,
-    COALESCE((SELECT SUM(c.precio_bs) FROM citas c WHERE c.consultorio_id=p.consultorio_id AND c.paciente_id=p.id
-      AND c.estado='atendida' AND c.eliminado_en IS NULL),0)
-    - COALESCE((SELECT SUM(pg.monto_bs) FROM pagos pg WHERE pg.consultorio_id=p.consultorio_id AND pg.paciente_id=p.id
-      AND pg.estado='valido' AND pg.eliminado_en IS NULL),0) saldo_bs
+     COALESCE((SELECT SUM(c.precio_bs) FROM citas c WHERE c.consultorio_id=p.consultorio_id AND c.paciente_id=p.id
+       AND c.estado='atendida' AND c.eliminado_en IS NULL),0) cargos_bs,
+     COALESCE((SELECT SUM(pi.precio_bs * pi.cantidad) FROM presupuesto_items pi
+       JOIN presupuestos pr ON pr.id=pi.presupuesto_id AND pr.consultorio_id=p.consultorio_id
+       WHERE pr.paciente_id=p.id AND pr.estado IN ('entregado','aceptado') AND pr.compartido_en IS NOT NULL
+       AND pr.eliminado_en IS NULL AND pi.eliminado_en IS NULL AND pi.precio_bs IS NOT NULL),0) cotizaciones_bs,
+     COALESCE((SELECT SUM(pg.monto_bs) FROM pagos pg WHERE pg.consultorio_id=p.consultorio_id AND pg.paciente_id=p.id
+       AND pg.estado='valido' AND pg.eliminado_en IS NULL),0) pagos_validos_bs,
+     COALESCE((SELECT SUM(c.precio_bs) FROM citas c WHERE c.consultorio_id=p.consultorio_id AND c.paciente_id=p.id
+       AND c.estado='atendida' AND c.eliminado_en IS NULL),0)
+     + COALESCE((SELECT SUM(pi.precio_bs * pi.cantidad) FROM presupuesto_items pi
+       JOIN presupuestos pr ON pr.id=pi.presupuesto_id AND pr.consultorio_id=p.consultorio_id
+       WHERE pr.paciente_id=p.id AND pr.estado IN ('entregado','aceptado') AND pr.compartido_en IS NOT NULL
+       AND pr.eliminado_en IS NULL AND pi.eliminado_en IS NULL AND pi.precio_bs IS NOT NULL),0)
+     - COALESCE((SELECT SUM(pg.monto_bs) FROM pagos pg WHERE pg.consultorio_id=p.consultorio_id AND pg.paciente_id=p.id
+       AND pg.estado='valido' AND pg.eliminado_en IS NULL),0) saldo_bs
     FROM pacientes p WHERE ${conditions.join(' AND ')} ORDER BY p.apellidos,p.nombres`).all(...values);
   res.json({ saldos: rows, moneda: 'Bs', nota: 'Los pagos QR por verificar no reducen el saldo' });
 });
@@ -1079,10 +1137,13 @@ router.get('/dashboard', (req, res) => {
       JOIN usuarios u ON u.id=c.doctor_id AND u.consultorio_id=c.consultorio_id
       WHERE c.consultorio_id=? AND c.paciente_id=? AND c.estado='confirmada' AND c.inicio>=CURRENT_TIMESTAMP AND c.eliminado_en IS NULL
       ORDER BY c.inicio LIMIT 5`).all(clinicId, patientId);
-    const balance = db.prepare(`SELECT
-      COALESCE((SELECT SUM(precio_bs) FROM citas WHERE consultorio_id=? AND paciente_id=? AND estado='atendida' AND eliminado_en IS NULL),0)
-      - COALESCE((SELECT SUM(monto_bs) FROM pagos WHERE consultorio_id=? AND paciente_id=? AND estado='valido' AND eliminado_en IS NULL),0) saldo_bs`)
-      .get(clinicId, patientId, clinicId, patientId);
+     const balance = db.prepare(`SELECT
+       COALESCE((SELECT SUM(precio_bs) FROM citas WHERE consultorio_id=? AND paciente_id=? AND estado='atendida' AND eliminado_en IS NULL),0)
+       + COALESCE((SELECT SUM(pi.precio_bs * pi.cantidad) FROM presupuesto_items pi JOIN presupuestos pr ON pr.id=pi.presupuesto_id
+         WHERE pr.consultorio_id=? AND pr.paciente_id=? AND pr.estado IN ('entregado','aceptado') AND pr.compartido_en IS NOT NULL
+         AND pr.eliminado_en IS NULL AND pi.eliminado_en IS NULL AND pi.precio_bs IS NOT NULL),0)
+       - COALESCE((SELECT SUM(monto_bs) FROM pagos WHERE consultorio_id=? AND paciente_id=? AND estado='valido' AND eliminado_en IS NULL),0) saldo_bs`)
+       .get(clinicId, patientId, clinicId, patientId, clinicId, patientId);
     return res.json({ proximas_citas: next, saldo_bs: balance.saldo_bs });
   }
   const doctorFilter = req.user.rol === 'doctor' ? ' AND doctor_id=@usuarioId' : '';

@@ -140,6 +140,7 @@ CREATE TABLE IF NOT EXISTS pagos (
   consultorio_id INTEGER NOT NULL REFERENCES consultorios(id),
   paciente_id INTEGER NOT NULL REFERENCES pacientes(id),
   cita_id INTEGER REFERENCES citas(id),
+  presupuesto_id INTEGER REFERENCES presupuestos(id),
   monto_bs REAL NOT NULL CHECK (monto_bs > 0),
   metodo TEXT NOT NULL CHECK (metodo IN ('efectivo','tarjeta','transferencia','qr')),
   estado TEXT NOT NULL CHECK (estado IN ('por_verificar','valido','anulado')),

@@ -72,9 +72,8 @@ export function Agenda() {
   function openCreateAt(day, event) {
     if (event.target !== event.currentTarget) return;
     const offset = event.clientY - event.currentTarget.getBoundingClientRect().top;
-    const minutes = Math.min(690, Math.max(0, Math.round(offset / 30) * 30));
-    const start = new Date(day);
-    start.setHours(8, minutes, 0, 0);
+    const minutes = Math.min(660, Math.max(0, Math.round(offset / 30) * 30));
+    const start = calendarStart(day, minutes);
     openCreate(start);
   }
   async function createAppointment(event) {
@@ -126,6 +125,7 @@ export function Agenda() {
           doctor_id: editing.doctor_id,
           servicio_id: editing.servicio_id,
           inicio: new Date(editing.inicio_local).toISOString(),
+          fin: new Date(new Date(editing.inicio_local).getTime() + Number(editing.duracion_min || 30) * 60000).toISOString(),
           motivo: editing.motivo,
           notas: editing.notas,
         },
@@ -148,9 +148,8 @@ export function Agenda() {
     if (!appointment) return;
     const rect = event.currentTarget.getBoundingClientRect();
     const offset = event.clientY - rect.top;
-    const minutes = Math.min(690, Math.max(0, Math.round(offset / 30) * 30));
-    const start = new Date(day);
-    start.setHours(8, minutes, 0, 0);
+    const minutes = Math.min(660, Math.max(0, Math.round(offset / 30) * 30));
+    const start = calendarStart(day, minutes);
     if (sameDay(new Date(appointment.inicio), day) && formatTime(appointment.inicio) === formatTime(start.toISOString())) return;
     setBusy(true);
     try {
@@ -394,10 +393,11 @@ export function Agenda() {
             <button
               className="button button-coral button-wide"
               onClick={() =>
-                setEditing({
-                  ...selected,
-                  inicio_local: toLocalInput(selected.inicio),
-                })
+                  setEditing({
+                    ...selected,
+                    inicio_local: toLocalInput(selected.inicio),
+                    duracion_min: Math.round((new Date(selected.fin).getTime() - new Date(selected.inicio).getTime()) / 60000),
+                  })
               }
             >
               <Icon name="edit" /> Editar o reprogramar
@@ -425,6 +425,16 @@ export function Agenda() {
                 }
                 required
               />
+            </Field>
+            <Field label="Duración">
+              <select
+                value={editing.duracion_min || 30}
+                onChange={(event) => setEditing({ ...editing, duracion_min: Number(event.target.value) })}
+              >
+                {!([30, 60].includes(Number(editing.duracion_min))) && <option value={editing.duracion_min}>{editing.duracion_min} minutos</option>}
+                <option value="30">30 minutos</option>
+                <option value="60">1 hora</option>
+              </select>
             </Field>
             <div className="availability-panel">
               <div className="availability-head">
@@ -1053,12 +1063,13 @@ export function PaymentsDesk() {
   const paymentsRemote = useRemote(query);
   const patientsRemote = useRemote("/pacientes");
   const [cashOpen, setCashOpen] = useState(false);
-  const [cash, setCash] = useState({ paciente_id: "", monto_bs: "", cita_id: "" });
+  const [cash, setCash] = useState({ paciente_id: "", monto_bs: "", cita_id: "", presupuesto_id: "" });
   const [cashCitas, setCashCitas] = useState([]);
   const [message, setMessage] = useState("");
+  const quotesRemote = useRemote(cash.paciente_id ? `/presupuestos?paciente_id=${encodeURIComponent(cash.paciente_id)}` : "", { enabled: Boolean(cash.paciente_id) });
   const payments = unwrap(paymentsRemote.data, "pagos");
   async function loadCashCitas(pacienteId) {
-    setCash((current) => ({ ...current, paciente_id: pacienteId, cita_id: "" }));
+    setCash((current) => ({ ...current, paciente_id: pacienteId, cita_id: "", presupuesto_id: "" }));
     if (!pacienteId) { setCashCitas([]); return; }
     try {
       const result = await api(`/citas?paciente_id=${encodeURIComponent(pacienteId)}`);
@@ -1090,7 +1101,7 @@ export function PaymentsDesk() {
         body: { ...cash, metodo: "efectivo" },
       });
       setCashOpen(false);
-      setCash({ paciente_id: "", monto_bs: "", cita_id: "" });
+      setCash({ paciente_id: "", monto_bs: "", cita_id: "", presupuesto_id: "" });
       setCashCitas([]);
       setMessage("Cobro registrado.");
       paymentsRemote.reload();
@@ -1209,6 +1220,19 @@ export function PaymentsDesk() {
                 ))}
               </select>
             </Field>
+            <Field label="Cotización (opcional)">
+              <select
+                value={cash.presupuesto_id || ""}
+                onChange={(e) => setCash({ ...cash, presupuesto_id: e.target.value })}
+              >
+                <option value="">Pago general (sin cotización)</option>
+                {unwrap(quotesRemote.data, "presupuestos").filter((quote) => quote.pago?.estado !== "pagado").map((quote) => (
+                  <option value={quote.id} key={quote.id}>
+                    {quote.titulo || "Plan de tratamiento"} · saldo {formatMoney(quote.pago?.saldo_bs)}
+                  </option>
+                ))}
+              </select>
+            </Field>
             <Field label="Monto (Bs)">
               <input
                 type="number"
@@ -1307,6 +1331,12 @@ function addDays(date, days) {
   const result = new Date(date);
   result.setDate(result.getDate() + days);
   return result;
+}
+function calendarStart(day, minutes) {
+  const date = `${day.getFullYear()}-${String(day.getMonth() + 1).padStart(2, "0")}-${String(day.getDate()).padStart(2, "0")}`;
+  const hour = String(8 + Math.floor(minutes / 60)).padStart(2, "0");
+  const minute = String(minutes % 60).padStart(2, "0");
+  return new Date(`${date}T${hour}:${minute}:00-04:00`);
 }
 function sameDay(left, right) {
   return (

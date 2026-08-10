@@ -163,7 +163,9 @@ export function ShareQuoteModal({ detail, onClose, onShared }) {
   const centro = detail.estado === 'borrador' || detail.estado === 'archivado'
   const telefono = String(detail.telefono || '').replace(/\D/g, '')
   const waNumber = telefono ? (telefono.startsWith('591') ? telefono : `591${telefono.replace(/^0/, '')}`) : ''
-  const waLink = `https://wa.me/${waNumber}${waNumber ? '' : ''}?text=${encodeURIComponent(`Hola ${detail.nombres}, aquí tienes tu cotización: ${url}`)}`
+  const total = formatMoney(detail.resumen?.total_bs || 0)
+  const price = detail.resumen?.sin_precio > 0 ? `Total publicado: ${total} + servicios por definir.` : `Total cotizado: ${total}.`
+  const waLink = `https://wa.me/${waNumber}?text=${encodeURIComponent(`Hola ${detail.nombres}, aquí tienes tu cotización. ${price} Puedes revisar el detalle aquí: ${url}`)}`
 
   async function copy() {
     try {
@@ -186,9 +188,10 @@ export function ShareQuoteModal({ detail, onClose, onShared }) {
         </div>
         {detail.visto_en && <p className="share-seen"><Icon name="check" size={15} /> El paciente ya vio la cotización el {formatDate(detail.visto_en)}.</p>}
         <div className="modal-actions">
-          <a className="button button-primary" href={centro ? undefined : waLink} target="_blank" rel="noreferrer" onClick={centro ? (event) => event.preventDefault() : undefined} aria-disabled={centro}>
+          <a className="button button-primary" href={!centro && waNumber ? waLink : undefined} target="_blank" rel="noreferrer" onClick={centro || !waNumber ? (event) => event.preventDefault() : undefined} aria-disabled={centro || !waNumber}>
             <Icon name="whatsapp" /> Enviar por WhatsApp
           </a>
+          {!waNumber && <p className="form-error">El paciente no tiene un número de WhatsApp registrado.</p>}
           <button className="button button-ghost" onClick={onClose}>Cerrar</button>
         </div>
       </div>

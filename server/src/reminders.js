@@ -13,7 +13,7 @@ export function startReminders() {
     return null;
   }
   return cron.schedule(config.smtp.cron, async () => {
-    const rows = db.prepare(`SELECT c.id, c.consultorio_id, c.inicio, p.email, p.nombres,
+    const rows = db.prepare(`SELECT c.id, c.consultorio_id, c.inicio, c.precio_bs, p.email, p.nombres,
       co.nombre consultorio, s.nombre servicio
       FROM citas c
       JOIN pacientes p ON p.id = c.paciente_id AND p.consultorio_id = c.consultorio_id
@@ -27,10 +27,12 @@ export function startReminders() {
       .all(`+${config.smtp.hours} hours`);
     for (const row of rows) {
       try {
+        const date = new Intl.DateTimeFormat('es-BO', { timeZone: 'America/La_Paz', dateStyle: 'full', timeStyle: 'short' }).format(new Date(row.inicio));
+        const price = row.precio_bs === null ? 'Precio: se define en la consulta.' : `Precio: Bs ${new Intl.NumberFormat('es-BO', { maximumFractionDigits: 2 }).format(row.precio_bs)}`;
         await sendEmail({
           to: row.email,
           subject: `Recordatorio de cita - ${row.consultorio}`,
-          text: `Hola ${row.nombres}, le recordamos su cita de ${row.servicio} para ${row.inicio}.`
+          text: `Hola ${row.nombres}, le recordamos su cita de ${row.servicio} para ${date}. ${price} Consultorio: ${row.consultorio}.`
         });
         db.prepare(`INSERT INTO email_recordatorios
           (consultorio_id, cita_id, destinatario, estado, error) VALUES (?, ?, ?, 'enviado', NULL)
