@@ -1,6 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import { randomUUID } from 'node:crypto';
+import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { Router } from 'express';
 import multer from 'multer';
 import { authenticate, allowRoles, requireTenant } from '../auth.js';
@@ -10,6 +10,40 @@ import { sendAppointmentEmail } from '../email.js';
 import { ApiError, positiveNumber, required } from '../http.js';
 
 const router = Router();
+router.get('/presupuestos/publico/:token', (req, res) => {
+  const match = lookupQuoteToken(req.params.token);
+  if (!match) throw new ApiError(404, 'Cotización no encontrada o ya no está disponible');
+  const quote = db.prepare(`SELECT pr.*, p.codigo, p.nombres, p.apellidos, c.nombre consultorio, c.telefono consultorio_telefono
+    FROM presupuestos pr
+    JOIN pacientes p ON p.id=pr.paciente_id AND p.consultorio_id=pr.consultorio_id
+    JOIN consultorios c ON c.id=pr.consultorio_id
+    WHERE pr.id=? AND pr.consultorio_id=? AND pr.eliminado_en IS NULL`).get(match.id, match.consultorio_id);
+  if (!quote || quote.estado === 'borrador' || quote.estado === 'archivado')
+    throw new ApiError(404, 'Cotización no disponible para compartir');
+  if (!quote.visto_en) {
+    db.prepare(`UPDATE presupuestos SET visto_en=CURRENT_TIMESTAMP WHERE id=?`).run(quote.id);
+    audit(match.consultorio_id, null, 'presupuesto_publico_visto', 'presupuesto', quote.id,
+      { paciente_id: quote.paciente_id }, req.ip, quote.paciente_id);
+  }
+  const items = db.prepare(`SELECT nombre, cantidad, precio_bs, duracion_min, notas FROM presupuesto_items
+    WHERE presupuesto_id=? AND eliminado_en IS NULL ORDER BY posicion,id`).all(quote.id);
+  res.json({
+    cotizacion: {
+      id: quote.id,
+      titulo: quote.titulo,
+      notas: quote.notas,
+      estado: quote.estado,
+      creado_en: quote.creado_en,
+      compartido_en: quote.compartido_en,
+      visto_en: quote.visto_en,
+      items,
+      total_bs: quoteSummary(quote.id).total_bs,
+      sin_precio: quoteSummary(quote.id).sin_precio,
+    },
+    paciente: { codigo: quote.codigo, nombres: quote.nombres, apellidos: quote.apellidos },
+    consultorio: { nombre: quote.consultorio, telefono: quote.consultorio_telefono },
+  });
+});
 router.use(authenticate);
 
 const imageTypes = new Set(['image/jpeg', 'image/png', 'image/webp']);
@@ -476,6 +510,51 @@ const quoteSummary = (quoteId) => db.prepare(`SELECT
     COALESCE(SUM(CASE WHEN precio_bs IS NULL THEN 1 ELSE 0 END), 0) sin_precio
   FROM presupuesto_items WHERE presupuesto_id=? AND eliminado_en IS NULL`).get(quoteId);
 
+const newQuoteToken = () => randomBytes(24).toString('base64url');
+const ensureQuoteToken = (quoteId) => {
+  const current = db.prepare(`SELECT token_publico FROM presupuestos WHERE id=?`).get(quoteId);
+  if (current?.token_publico) return current.token_publico;
+  for (let attempt = 0; attempt < 5; attempt++) {
+    const token = newQuoteToken();
+    try {
+      db.prepare(`UPDATE presupuestos SET token_publico=? WHERE id=?`).run(token, quoteId);
+      return token;
+    } catch (error) {
+      if (error.code !== 'SQLITE_CONSTRAINT_UNIQUE') throw error;
+    }
+  }
+  throw new Error('No se pudo generar un token único para la cotización');
+};
+const lookupQuoteToken = (token) => {
+  if (!token || typeof token !== 'string' || token.length < 8 || token.length > 80) return null;
+  return db.prepare(`SELECT pr.id, pr.consultorio_id, pr.paciente_id FROM presupuestos pr
+    WHERE token_publico=? AND eliminado_en IS NULL`).get(token);
+};
+const quoteTimeline = (quoteId) => db.prepare(`SELECT a.creado_en, a.datos_json, u.nombre usuario
+  FROM auditoria a LEFT JOIN usuarios u ON u.id=a.usuario_id AND u.consultorio_id=a.consultorio_id
+  WHERE a.entidad_tipo='presupuesto' AND a.entidad_id=? AND a.accion='cambiar_estado'
+  ORDER BY a.creado_en ASC`).all(quoteId)
+  .map((row) => {
+    try {
+      const datos = JSON.parse(row.datos_json || '{}');
+      return { estado: datos.estado, fecha: row.creado_en, usuario: row.usuario || null };
+    } catch { return null; }
+  })
+  .filter(Boolean);
+
+router.post('/presupuestos/:id/compartir', allowRoles('doctor', 'operativo'), (req, res) => {
+  const quoteId = id(req.params.id);
+  const quote = db.prepare(`SELECT * FROM presupuestos WHERE id=? AND consultorio_id=? AND eliminado_en IS NULL`)
+    .get(quoteId, tenant(req));
+  if (!quote) throw new ApiError(404, 'Presupuesto no encontrado');
+  const token = ensureQuoteToken(quoteId);
+  if (!quote.compartido_en) {
+    db.prepare(`UPDATE presupuestos SET compartido_en=CURRENT_TIMESTAMP WHERE id=?`).run(quoteId);
+  }
+  log(req, 'compartir', 'presupuesto', quoteId, { paciente_id: quote.paciente_id }, quote.paciente_id);
+  res.json({ mensaje: 'Enlace público listo para compartir', public_token: token, compartido_en: quote.compartido_en });
+});
+
 router.get('/presupuestos', allowRoles('doctor', 'operativo'), (req, res) => {
   const conditions = ['pr.consultorio_id=?', 'pr.eliminado_en IS NULL'];
   const values = [tenant(req)];
@@ -489,6 +568,7 @@ router.get('/presupuestos', allowRoles('doctor', 'operativo'), (req, res) => {
     JOIN pacientes p ON p.id=pr.paciente_id AND p.consultorio_id=pr.consultorio_id
     JOIN usuarios u ON u.id=pr.creado_por AND u.consultorio_id=pr.consultorio_id
     WHERE ${conditions.join(' AND ')} ORDER BY pr.creado_en DESC LIMIT 500`).all(...values);
+  for (const row of rows) row.public_token = ensureQuoteToken(row.id);
   res.json({ presupuestos: rows.map((row) => ({ ...row, resumen: quoteSummary(row.id) })) });
 });
 router.post('/presupuestos', allowRoles('doctor', 'operativo'), (req, res) => {
@@ -504,6 +584,7 @@ router.post('/presupuestos', allowRoles('doctor', 'operativo'), (req, res) => {
       req.body.titulo ? String(req.body.titulo).trim().slice(0, 120) : null,
       req.body.notas ? String(req.body.notas).trim().slice(0, 2000) : null, req.user.id);
     replaceQuoteItems(result.lastInsertRowid, tenant(req), items);
+    ensureQuoteToken(result.lastInsertRowid);
     return result.lastInsertRowid;
   })();
   log(req, 'crear', 'presupuesto', quoteId, { paciente_id: patientId, titulo: req.body.titulo, items: items.map((item) => ({ nombre: item.name, precio_bs: item.price })) }, patientId);
@@ -511,14 +592,23 @@ router.post('/presupuestos', allowRoles('doctor', 'operativo'), (req, res) => {
 });
 router.get('/presupuestos/:id', allowRoles('doctor', 'operativo'), (req, res) => {
   const quoteId = id(req.params.id);
-  const quote = db.prepare(`SELECT pr.*,p.codigo,p.nombres,p.apellidos,u.nombre creado_por_nombre
+  const quote = db.prepare(`SELECT pr.*,p.codigo,p.nombres,p.apellidos,p.telefono,u.nombre creado_por_nombre
     FROM presupuestos pr
     JOIN pacientes p ON p.id=pr.paciente_id AND p.consultorio_id=pr.consultorio_id
     JOIN usuarios u ON u.id=pr.creado_por AND u.consultorio_id=pr.consultorio_id
     WHERE pr.id=? AND pr.consultorio_id=? AND pr.eliminado_en IS NULL`).get(quoteId, tenant(req));
   if (!quote) throw new ApiError(404, 'Presupuesto no encontrado');
   const items = db.prepare(`SELECT * FROM presupuesto_items WHERE presupuesto_id=? AND eliminado_en IS NULL ORDER BY posicion,id`).all(quoteId);
-  res.json({ presupuesto: { ...quote, resumen: quoteSummary(quoteId), items } });
+  const publicToken = ensureQuoteToken(quoteId);
+  res.json({
+    presupuesto: {
+      ...quote,
+      resumen: quoteSummary(quoteId),
+      items,
+      timeline: quoteTimeline(quoteId),
+      public_token: publicToken,
+    }
+  });
 });
 router.patch('/presupuestos/:id', allowRoles('doctor', 'operativo'), (req, res) => {
   const quoteId = id(req.params.id);

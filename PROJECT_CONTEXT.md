@@ -128,6 +128,7 @@ Estado (agosto 2026): **18/18 tests** OK; build cliente OK; 0 vulnerabilidades n
 **Listo para demo de agenda**
 
 - OAuth, multi-tenant, agenda, pacientes, servicios, pagos QR, **cotizaciones sin precio obligatorio**, panel admin, rate limit, backups locales, tests verdes.
+- **Enlace público de cotizaciones**: cada cotización tiene token único; el doctor lo comparte por WhatsApp o copiándolo, el paciente lo ve sin sesión (`/cotizacion/:token`), solo visible desde estado `entregado`/`aceptado` (borrador/archivado devuelven 404), se registra `compartido_en` y `visto_en` (primer vista audita; segundas no re-auditan), y el detalle muestra el recorrido de estados (timeline) con autor y fecha.
 
 **Pendiente antes de datos reales de clientes**
 
@@ -148,7 +149,7 @@ Estado (agosto 2026): **18/18 tests** OK; build cliente OK; 0 vulnerabilidades n
 
 **Módulos siguientes (expansión)**
 
-WhatsApp → presupuestos con abonos (convertir cotización a pagos) → odontograma → control de caja → reportes → consentimiento informado → link público de agendamiento.
+WhatsApp (botón ya integrado en compartir) → presupuestos con abonos (convertir cotización a pagos) → odontograma → control de caja → reportes → consentimiento informado → link público de agendamiento.
 
 ## Criterio para continuar
 

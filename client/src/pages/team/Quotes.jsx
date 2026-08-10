@@ -157,6 +157,45 @@ export function QuoteEditor({ patient, quote, initialPatientId = '', onClose, on
   )
 }
 
+export function ShareQuoteModal({ detail, onClose, onShared }) {
+  const [copied, setCopied] = useState(false)
+  const url = `${window.location.origin}/cotizacion/${detail.public_token}`
+  const centro = detail.estado === 'borrador' || detail.estado === 'archivado'
+  const telefono = String(detail.telefono || '').replace(/\D/g, '')
+  const waNumber = telefono ? (telefono.startsWith('591') ? telefono : `591${telefono.replace(/^0/, '')}`) : ''
+  const waLink = `https://wa.me/${waNumber}${waNumber ? '' : ''}?text=${encodeURIComponent(`Hola ${detail.nombres}, aquí tienes tu cotización: ${url}`)}`
+
+  async function copy() {
+    try {
+      await navigator.clipboard.writeText(url)
+      setCopied(true)
+      setTimeout(() => setCopied(false), 2500)
+    } catch {
+      onShared('No se pudo copiar el enlace.')
+    }
+  }
+
+  return (
+    <Modal title="Compartir cotización" onClose={onClose}>
+      <div className="share-quote">
+        <p className="muted-box">El paciente abre este enlace en su celular <strong>sin necesidad de iniciar sesión</strong> y ve su plan de tratamiento.</p>
+        {centro && <p className="form-error">Cotización <strong>{detail.estado}</strong>: el enlace solo se activa con una entregada o aceptada.</p>}
+        <div className="share-url">
+          <span>{url}</span>
+          <button className="button button-ghost button-small" onClick={copy} disabled={centro}><Icon name="file" /> {copied ? 'Copiado' : 'Copiar'}</button>
+        </div>
+        {detail.visto_en && <p className="share-seen"><Icon name="check" size={15} /> El paciente ya vio la cotización el {formatDate(detail.visto_en)}.</p>}
+        <div className="modal-actions">
+          <a className="button button-primary" href={centro ? undefined : waLink} target="_blank" rel="noreferrer" onClick={centro ? (event) => event.preventDefault() : undefined} aria-disabled={centro}>
+            <Icon name="whatsapp" /> Enviar por WhatsApp
+          </a>
+          <button className="button button-ghost" onClick={onClose}>Cerrar</button>
+        </div>
+      </div>
+    </Modal>
+  )
+}
+
 export default function Quotes() {
   const [filter, setFilter] = useState('todos')
   const query = filter === 'todos' ? '/presupuestos' : `/presupuestos?estado=${filter}`
@@ -167,6 +206,7 @@ export default function Quotes() {
   const [nextState, setNextState] = useState('')
   const [busy, setBusy] = useState(false)
   const [message, setMessage] = useState('')
+  const [sharing, setSharing] = useState(false)
   const quotes = unwrap(quotesRemote.data, 'presupuestos')
   const detail = detailRemote.data?.presupuesto
 
@@ -192,6 +232,23 @@ export default function Quotes() {
       setMessage('Cotización archivada.')
       setViewId(null)
       quotesRemote.reload()
+    } catch (requestError) {
+      setMessage(requestError.message)
+    } finally {
+      setBusy(false)
+    }
+  }
+  async function openShare() {
+    if (!detail) return
+    setBusy(true)
+    try {
+      if (detail.estado === 'borrador') {
+        await api(`/presupuestos/${detail.id}/estado`, { method: 'PATCH', body: { estado: 'entregado' } })
+      }
+      await api(`/presupuestos/${detail.id}/compartir`, { method: 'POST' })
+      await detailRemote.reload()
+      quotesRemote.reload()
+      setSharing(true)
     } catch (requestError) {
       setMessage(requestError.message)
     } finally {
@@ -279,8 +336,25 @@ export default function Quotes() {
                 {detail.resumen.sin_precio > 0 && <p>{detail.resumen.sin_precio} servicio(s) sin precio · se definen en consulta</p>}
               </div>
               {detail.notas && <p className="quote-notes">{detail.notas}</p>}
+              {detail.timeline?.length > 0 && (
+                <div className="quote-timeline">
+                  <small className="eyebrow">RECORRIDO</small>
+                  <ol>
+                    {detail.timeline.map((step, index) => (
+                      <li key={index}>
+                        <span className={`dot dot-${step.estado}`} />
+                        <div>
+                          <strong>{({ borrador: 'Borrador', entregado: 'Entregada', aceptado: 'Aceptada', archivado: 'Archivada' })[step.estado] || step.estado}</strong>
+                          <small>{formatDate(step.fecha)} {step.usuario ? `· por ${step.usuario}` : ''}</small>
+                        </div>
+                      </li>
+                    ))}
+                  </ol>
+                </div>
+              )}
               <div className="modal-actions">
                 <button className="button button-ghost" onClick={() => { setEditing(detail); setViewId(null) }}><Icon name="edit" /> Editar</button>
+                <button className="button button-primary button-share" disabled={busy || detail.estado === 'archivado'} onClick={openShare}><Icon name="whatsapp" /> Compartir</button>
                 <button className="button button-primary" disabled={busy || detail.estado === 'archivado'} onClick={() => changeState(detail.estado === 'aceptado' ? 'entregado' : 'aceptado')}>
                   {detail.estado === 'aceptado' ? 'Volver a entregado' : 'Marcar aceptada'}
                 </button>
@@ -296,6 +370,7 @@ export default function Quotes() {
           ) : null}
         </Modal>
       )}
+      {sharing && detail && <ShareQuoteModal detail={detail} onClose={() => setSharing(false)} onShared={setMessage} />}
       <Toast message={message} onClose={() => setMessage('')} />
     </>
   )

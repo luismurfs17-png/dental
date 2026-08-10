@@ -19,6 +19,10 @@ function ensureColumn(table, column, definition) {
 
 ensureColumn('consultorios', 'qr_path', 'TEXT');
 ensureColumn('consultorios', 'modo_cobro', "TEXT NOT NULL DEFAULT 'mixto' CHECK (modo_cobro IN ('app','definir','mixto'))");
+ensureColumn('presupuestos', 'token_publico', 'TEXT');
+ensureColumn('presupuestos', 'compartido_en', 'TEXT');
+ensureColumn('presupuestos', 'visto_en', 'TEXT');
+db.exec('CREATE UNIQUE INDEX IF NOT EXISTS uq_presupuestos_token ON presupuestos(token_publico)');
 ensureColumn('pacientes', 'recordatorios_activos', 'INTEGER NOT NULL DEFAULT 1 CHECK (recordatorios_activos IN (0,1))');
 ensureColumn('citas', 'reprogramaciones_paciente', 'INTEGER NOT NULL DEFAULT 0 CHECK (reprogramaciones_paciente IN (0,1))');
 ensureColumn('citas', 'reprogramada_por_paciente_en', 'TEXT');

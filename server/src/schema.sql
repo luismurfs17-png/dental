@@ -162,6 +162,9 @@ CREATE TABLE IF NOT EXISTS presupuestos (
   notas TEXT,
   estado TEXT NOT NULL DEFAULT 'borrador' CHECK (estado IN ('borrador','entregado','aceptado','archivado')),
   creado_por INTEGER NOT NULL REFERENCES usuarios(id),
+  token_publico TEXT,
+  compartido_en TEXT,
+  visto_en TEXT,
   creado_en TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
   actualizado_en TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
   eliminado_en TEXT

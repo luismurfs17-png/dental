@@ -12,6 +12,7 @@ import AdminPanel from './pages/admin/AdminPanel.jsx'
 import { BookAppointment, PatientAppointments, PatientDashboard, PatientHealth, PatientPayments } from './pages/patient/PatientPages.jsx'
 import { Agenda, Notifications, Patients, PaymentsDesk, Services } from './pages/team/TeamPages.jsx'
 import Quotes from './pages/team/Quotes.jsx'
+import QuotePublic from './pages/public/QuotePublic.jsx'
 import PatientDetail from './pages/team/PatientDetail.jsx'
 import Settings from './pages/team/Settings.jsx'
 import Audit from './pages/team/Audit.jsx'
@@ -50,6 +51,7 @@ export default function App() {
         <Routes>
           <Route path="/login" element={<Login />} />
           <Route path="/auth/success" element={<AuthSuccess />} />
+          <Route path="/cotizacion/:token" element={<QuotePublic />} />
           <Route path="/crear-consultorio" element={<RequireAuth><Onboarding /></RequireAuth>} />
           <Route element={<RequireAuth><AppShell /></RequireAuth>}>
             <Route path="/inicio" element={<RoleRoute allow={['paciente']}><PatientDashboard /></RoleRoute>} />

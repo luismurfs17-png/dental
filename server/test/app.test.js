@@ -23,7 +23,7 @@ before(() => {
       return clinic;
     };
     const ensureUser = (clinicId, email, nombre, rol) => {
-      const existing = db.prepare(`SELECT id FROM usuarios WHERE email=? COLLATE NOCASE`).get(email);
+      const existing = db.prepare(`SELECT id FROM usuarios WHERE email=? COLLATE NOCASE ORDER BY id LIMIT 1`).get(email);
       if (existing) {
         db.prepare(`UPDATE usuarios SET consultorio_id=?, nombre=?, rol=?, estado='activo', eliminado_en=NULL WHERE id=?`)
           .run(clinicId, nombre, rol, existing.id);
@@ -640,6 +640,55 @@ test('cotizaciones: servicios del catálogo con o sin precio, edición y aislami
   await foreign.patch(`/api/presupuestos/${quoteId}/estado`).send({ estado: 'aceptado' }).expect(404);
   const foreignList = await foreign.get('/api/presupuestos').expect(200);
   assert.equal(foreignList.body.presupuestos.length, 0);
+});
+
+test('cotizaciones: enlace público, borrador oculto, estado entregado visible y visto_en', async () => {
+  const doctor = request.agent(app);
+  await doctor.post('/api/auth/desarrollo').send({ email: 'integration-doctor@test.local' }).expect(200);
+  const codigo = `${Date.now()}${Math.floor(Math.random() * 1000).toString().padStart(3, '0')}`;
+  const patient = await doctor.post('/api/pacientes').send({ codigo, nombres: 'Vista', apellidos: 'Publica' }).expect(201);
+  const patientId = patient.body.paciente.id;
+
+  const created = await doctor.post('/api/presupuestos').send({
+    paciente_id: patientId,
+    titulo: 'Plan compartido',
+    items: [{ nombre: 'Blanqueamiento', cantidad: 1, precio_bs: 350, duracion_min: 60 }],
+  }).expect(201);
+  let quoteId = created.body.id;
+
+  const detail = await doctor.get(`/api/presupuestos/${quoteId}`).expect(200);
+  const token = detail.body.presupuesto.public_token;
+  assert.ok(token && token.length >= 20, 'se genera un token público');
+
+  await request(app).get(`/api/presupuestos/publico/${token}`).expect(404).expect((res) => {
+    assert.match(res.body.mensaje, /no disponible/i, 'borrador no se comparte todavía');
+  });
+
+  await doctor.post(`/api/presupuestos/${quoteId}/compartir`).expect(200);
+  assert.ok(db.prepare('SELECT compartido_en FROM presupuestos WHERE id=?').get(quoteId).compartido_en, 'se marca compartido');
+  assert.ok(db.prepare(`SELECT id FROM auditoria WHERE entidad_tipo='presupuesto' AND entidad_id=? AND accion='compartir'`).get(quoteId), 'audita el compartir');
+
+  await doctor.patch(`/api/presupuestos/${quoteId}/estado`).send({ estado: 'entregado' }).expect(200);
+
+  let pub = await request(app).get(`/api/presupuestos/publico/${token}`).expect(200);
+  assert.equal(pub.body.paciente.nombres, 'Vista');
+  assert.equal(pub.body.consultorio.nombre, 'Integration Clinic');
+  assert.equal(pub.body.cotizacion.estado, 'entregado');
+  assert.equal(pub.body.cotizacion.items.length, 1);
+  assert.equal(pub.body.cotizacion.total_bs, 350);
+  assert.ok(db.prepare('SELECT visto_en FROM presupuestos WHERE id=?').get(quoteId).visto_en, 'primer visto marca visto_en');
+  assert.ok(db.prepare(`SELECT id FROM auditoria WHERE entidad_tipo='presupuesto' AND entidad_id=? AND accion='presupuesto_publico_visto'`).get(quoteId), 'audita el primer visto');
+
+  await request(app).get(`/api/presupuestos/publico/${token}`).expect(200);
+  assert.equal(db.prepare(`SELECT COUNT(*) total FROM auditoria WHERE entidad_tipo='presupuesto' AND entidad_id=? AND accion='presupuesto_publico_visto'`).get(quoteId).total, 1, 'no re-audita segundos vistos');
+
+  const ghost = await doctor.get(`/api/presupuestos`).expect(200);
+  const ghostQuote = ghost.body.presupuestos.find((quote) => quote.id === quoteId);
+  assert.equal(ghostQuote.public_token, token, 'el listado devuelve el mismo token');
+
+  await doctor.patch(`/api/presupuestos/${quoteId}/estado`).send({ estado: 'archivado' }).expect(200);
+  await request(app).get(`/api/presupuestos/publico/${token}`).expect(404);
+  await request(app).get(`/api/presupuestos/publico/token-inventado-1234567890`).expect(404);
 });
 
 test('mantenimiento: limpia notificaciones, auditoría, huérfanos en uploads y aplica WAL checkpoint', async () => {
