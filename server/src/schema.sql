@@ -9,6 +9,7 @@ CREATE TABLE IF NOT EXISTS consultorios (
   direccion TEXT,
   zona_horaria TEXT NOT NULL DEFAULT 'America/La_Paz',
   moneda TEXT NOT NULL DEFAULT 'Bs',
+  modo_cobro TEXT NOT NULL DEFAULT 'mixto' CHECK (modo_cobro IN ('app','definir','mixto')),
   qr_path TEXT,
   creado_en TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
   actualizado_en TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -63,7 +64,7 @@ CREATE TABLE IF NOT EXISTS servicios (
   consultorio_id INTEGER NOT NULL REFERENCES consultorios(id),
   nombre TEXT NOT NULL,
   descripcion TEXT,
-  precio_bs REAL NOT NULL CHECK (precio_bs >= 0),
+  precio_bs REAL CHECK (precio_bs IS NULL OR precio_bs >= 0),
   duracion_min INTEGER NOT NULL DEFAULT 30 CHECK (duracion_min > 0),
   activo INTEGER NOT NULL DEFAULT 1,
   creado_en TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -94,7 +95,7 @@ CREATE TABLE IF NOT EXISTS citas (
   inicio TEXT NOT NULL,
   fin TEXT NOT NULL,
   estado TEXT NOT NULL DEFAULT 'confirmada' CHECK (estado IN ('confirmada','atendida','cancelada','no_asistio')),
-  precio_bs REAL NOT NULL CHECK (precio_bs >= 0),
+  precio_bs REAL CHECK (precio_bs IS NULL OR precio_bs >= 0),
   motivo TEXT,
   notas TEXT,
   reprogramaciones_paciente INTEGER NOT NULL DEFAULT 0 CHECK (reprogramaciones_paciente IN (0,1)),
@@ -153,6 +154,33 @@ CREATE TABLE IF NOT EXISTS pagos (
   CHECK (metodo = 'qr' OR estado != 'por_verificar')
 );
 
+CREATE TABLE IF NOT EXISTS presupuestos (
+  id INTEGER PRIMARY KEY,
+  consultorio_id INTEGER NOT NULL REFERENCES consultorios(id),
+  paciente_id INTEGER NOT NULL REFERENCES pacientes(id),
+  titulo TEXT,
+  notas TEXT,
+  estado TEXT NOT NULL DEFAULT 'borrador' CHECK (estado IN ('borrador','entregado','aceptado','archivado')),
+  creado_por INTEGER NOT NULL REFERENCES usuarios(id),
+  creado_en TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  actualizado_en TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  eliminado_en TEXT
+);
+
+CREATE TABLE IF NOT EXISTS presupuesto_items (
+  id INTEGER PRIMARY KEY,
+  presupuesto_id INTEGER NOT NULL REFERENCES presupuestos(id),
+  servicio_id INTEGER REFERENCES servicios(id),
+  nombre TEXT NOT NULL,
+  cantidad INTEGER NOT NULL DEFAULT 1 CHECK (cantidad > 0),
+  precio_bs REAL CHECK (precio_bs IS NULL OR precio_bs >= 0),
+  duracion_min INTEGER CHECK (duracion_min IS NULL OR duracion_min > 0),
+  notas TEXT,
+  posicion INTEGER NOT NULL DEFAULT 0,
+  creado_en TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  eliminado_en TEXT
+);
+
 CREATE TABLE IF NOT EXISTS notificaciones (
   id INTEGER PRIMARY KEY,
   consultorio_id INTEGER NOT NULL REFERENCES consultorios(id),
@@ -208,3 +236,5 @@ CREATE INDEX IF NOT EXISTS idx_citas_agenda ON citas(consultorio_id, doctor_id, 
 CREATE INDEX IF NOT EXISTS idx_pagos_paciente ON pagos(consultorio_id, paciente_id, estado, eliminado_en);
 CREATE INDEX IF NOT EXISTS idx_notificaciones_usuario ON notificaciones(consultorio_id, usuario_id, leida_en, eliminado_en);
 CREATE INDEX IF NOT EXISTS idx_notas_paciente ON notas_paciente(consultorio_id, paciente_id, eliminado_en, creado_en);
+CREATE INDEX IF NOT EXISTS idx_presupuestos_consultorio ON presupuestos(consultorio_id, paciente_id, estado, eliminado_en, creado_en);
+CREATE INDEX IF NOT EXISTS idx_presupuesto_items_quote ON presupuesto_items(presupuesto_id, eliminado_en);

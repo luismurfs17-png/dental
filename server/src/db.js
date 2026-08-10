@@ -18,6 +18,7 @@ function ensureColumn(table, column, definition) {
 }
 
 ensureColumn('consultorios', 'qr_path', 'TEXT');
+ensureColumn('consultorios', 'modo_cobro', "TEXT NOT NULL DEFAULT 'mixto' CHECK (modo_cobro IN ('app','definir','mixto'))");
 ensureColumn('pacientes', 'recordatorios_activos', 'INTEGER NOT NULL DEFAULT 1 CHECK (recordatorios_activos IN (0,1))');
 ensureColumn('citas', 'reprogramaciones_paciente', 'INTEGER NOT NULL DEFAULT 0 CHECK (reprogramaciones_paciente IN (0,1))');
 ensureColumn('citas', 'reprogramada_por_paciente_en', 'TEXT');
@@ -27,6 +28,34 @@ ensureColumn('registros_clinicos', 'validado_por', 'INTEGER REFERENCES usuarios(
 ensureColumn('registros_clinicos', 'validado_en', 'TEXT');
 ensureColumn('auditoria', 'paciente_id', 'INTEGER REFERENCES pacientes(id)');
 db.exec('CREATE INDEX IF NOT EXISTS idx_auditoria_paciente ON auditoria(consultorio_id, paciente_id, creado_en)');
+
+makeColumnNullable('servicios', 'precio_bs', 'REAL');
+makeColumnNullable('citas', 'precio_bs', 'REAL');
+db.exec(fs.readFileSync(path.join(import.meta.dirname, 'schema.sql'), 'utf8'));
+
+function makeColumnNullable(table, column, type) {
+  const columns = db.prepare(`PRAGMA table_info(${table})`).all();
+  const target = columns.find((item) => item.name === column);
+  if (!target || target.notnull === 0) return;
+  const record = db.prepare(`SELECT sql FROM sqlite_master WHERE type='table' AND name=?`).get(table);
+  if (!record?.sql) throw new Error(`Tabla ${table} no encontrada para migrar ${column}`);
+  const pattern = `${column} ${type} NOT NULL`;
+  if (!record.sql.includes(pattern)) throw new Error(`Definición inesperada de ${table}.${column}: ${record.sql}`);
+  const rebuilt = record.sql.replace(pattern, `${column} ${type}`);
+  const temporary = `${table}_precio_migracion`;
+  fs.copyFileSync(config.dbFile, `${config.dbFile}.respaldo-migracion`);
+  db.pragma('foreign_keys = OFF');
+  try {
+    db.transaction(() => {
+      db.exec(rebuilt.replace(`CREATE TABLE ${table}`, `CREATE TABLE ${temporary}`));
+      db.prepare(`INSERT INTO ${temporary} SELECT * FROM ${table}`).run();
+      db.exec(`DROP TABLE ${table}`);
+      db.exec(`ALTER TABLE ${temporary} RENAME TO ${table}`);
+    })();
+  } finally {
+    db.pragma('foreign_keys = ON');
+  }
+}
 
 export function audit(consultorioId, usuarioId, accion, entidadTipo, entidadId, datos, ip, pacienteId) {
   db.prepare(`INSERT INTO auditoria

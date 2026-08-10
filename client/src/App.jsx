@@ -11,6 +11,7 @@ import Onboarding from './pages/Onboarding.jsx'
 import AdminPanel from './pages/admin/AdminPanel.jsx'
 import { BookAppointment, PatientAppointments, PatientDashboard, PatientHealth, PatientPayments } from './pages/patient/PatientPages.jsx'
 import { Agenda, Notifications, Patients, PaymentsDesk, Services } from './pages/team/TeamPages.jsx'
+import Quotes from './pages/team/Quotes.jsx'
 import PatientDetail from './pages/team/PatientDetail.jsx'
 import Settings from './pages/team/Settings.jsx'
 import Audit from './pages/team/Audit.jsx'
@@ -60,6 +61,7 @@ export default function App() {
             <Route path="/pacientes" element={<RoleRoute allow={['doctor', 'operativo']}><Patients /></RoleRoute>} />
             <Route path="/pacientes/:id" element={<RoleRoute allow={['doctor', 'operativo']}><PatientDetail /></RoleRoute>} />
             <Route path="/servicios" element={<RoleRoute allow={['doctor']}><Services /></RoleRoute>} />
+            <Route path="/presupuestos" element={<RoleRoute allow={['doctor', 'operativo']}><Quotes /></RoleRoute>} />
             <Route path="/cobros" element={<RoleRoute allow={['doctor', 'operativo']}><PaymentsDesk /></RoleRoute>} />
             <Route path="/notificaciones" element={<RoleRoute allow={['doctor', 'operativo']}><Notifications /></RoleRoute>} />
             <Route path="/configuracion" element={<RoleRoute allow={['doctor']}><Settings /></RoleRoute>} />

@@ -1,5 +1,7 @@
 import { before, test } from 'node:test';
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import path from 'node:path';
 import request from 'supertest';
 import jwt from 'jsonwebtoken';
 import { app } from '../src/app.js';
@@ -128,6 +130,88 @@ test('disponibilidad considera horario y conflicto, y el paciente reserva y canc
   assert.equal(appointment.estado, 'cancelada');
   const audit = db.prepare(`SELECT id FROM auditoria WHERE entidad_tipo='cita' AND entidad_id=? AND accion='cancelar'`).get(booking.body.id);
   assert.ok(audit);
+});
+
+test('tratamiento sin costo: el paciente lo ve, reserva sin pago y no genera saldo', async () => {
+  const doctor = request.agent(app);
+  await doctor.post('/api/auth/desarrollo').send({ email: 'integration-doctor@test.local' }).expect(200);
+
+  const created = await doctor.post('/api/servicios').send({ nombre: 'Valoración Inicial' }).expect(201);
+  const serviceId = created.body.id;
+  assert.equal(db.prepare('SELECT precio_bs FROM servicios WHERE id=?').get(serviceId).precio_bs, null);
+
+  await doctor.patch(`/api/servicios/${serviceId}`).send({ precio_bs: 45 }).expect(200);
+  assert.equal(db.prepare('SELECT precio_bs FROM servicios WHERE id=?').get(serviceId).precio_bs, 45);
+  await doctor.patch(`/api/servicios/${serviceId}`).send({ precio_bs: '' }).expect(200);
+  assert.equal(db.prepare('SELECT precio_bs FROM servicios WHERE id=?').get(serviceId).precio_bs, null);
+  await doctor.post('/api/servicios').send({ nombre: 'Sin Precio', precio_bs: -5 }).expect(400);
+
+  const patient = request.agent(app);
+  await patient.post('/api/auth/desarrollo').send({ email: 'integration-patient@test.local' }).expect(200);
+  const catalog = await patient.get('/api/servicios').expect(200);
+  assert.ok(catalog.body.servicios.some((service) => service.id === serviceId && service.precio_bs === null));
+
+  const date = new Date(Date.now() + 21 * 86400000).toISOString().slice(0, 10);
+  const weekday = new Date(`${date}T12:00:00Z`).getUTCDay();
+  db.prepare(`INSERT OR IGNORE INTO horarios (consultorio_id,usuario_id,dia_semana,hora_inicio,hora_fin) VALUES (?,?,?,'09:00','10:00')`).run(fixture.clinicId, fixture.doctorId, weekday);
+  const booking = await patient.post('/api/citas').send({
+    paciente_id: fixture.patientId, doctor_id: fixture.doctorId, servicio_id: serviceId,
+    inicio: `${date}T09:00:00-04:00`, motivo: 'SIN-COSTO-BOOKING'
+  }).expect(201);
+  const appointment = db.prepare('SELECT precio_bs,servicio_id FROM citas WHERE id=? AND consultorio_id=?').get(booking.body.id, fixture.clinicId);
+  assert.deepEqual(appointment, { precio_bs: null, servicio_id: serviceId });
+
+  const patientsBefore = await doctor.get('/api/pacientes').expect(200);
+  const saldoBefore = patientsBefore.body.pacientes.find((item) => item.id === fixture.patientId).saldo_bs;
+  await doctor.patch(`/api/citas/${booking.body.id}/estado`).send({ estado: 'atendida' }).expect(200);
+  const patients = await doctor.get('/api/pacientes').expect(200);
+  const saldoAfter = patients.body.pacientes.find((item) => item.id === fixture.patientId).saldo_bs;
+  assert.equal(saldoAfter, saldoBefore);
+
+  db.prepare('DELETE FROM citas WHERE id=?').run(booking.body.id);
+  await doctor.delete(`/api/servicios/${serviceId}`).expect(200);
+});
+
+test('modo de cobro: por la app exige precio, definir lo libera, y el dashboard cuenta "por definir"', async () => {
+  const doctor = request.agent(app);
+  await doctor.post('/api/auth/desarrollo').send({ email: 'integration-doctor@test.local' }).expect(200);
+  const clinic = await doctor.get('/api/consultorio').expect(200);
+  const previousMode = clinic.body.consultorio.modo_cobro;
+
+  try {
+    await doctor.patch('/api/consultorio').send({ modo_cobro: 'app' }).expect(200);
+    await doctor.post('/api/servicios').send({ nombre: 'App Sin Precio' }).expect(400);
+    const paid = await doctor.post('/api/servicios').send({ nombre: 'App Con Precio', precio_bs: 60 }).expect(201);
+    await doctor.patch(`/api/servicios/${paid.body.id}`).send({ precio_bs: '' }).expect(400);
+    assert.equal(db.prepare('SELECT precio_bs FROM servicios WHERE id=?').get(paid.body.id).precio_bs, 60);
+    await doctor.delete(`/api/servicios/${paid.body.id}`).expect(200);
+
+    await doctor.patch('/api/consultorio').send({ modo_cobro: 'definir' }).expect(200);
+    const free = await doctor.post('/api/servicios').send({ nombre: 'Definir Sin Precio' }).expect(201);
+    assert.equal(db.prepare('SELECT precio_bs FROM servicios WHERE id=?').get(free.body.id).precio_bs, null);
+    await doctor.delete(`/api/servicios/${free.body.id}`).expect(200);
+
+    await doctor.patch('/api/consultorio').send({ modo_cobro: 'inventado' }).expect(400);
+  } finally {
+    await doctor.patch('/api/consultorio').send({ modo_cobro: previousMode }).expect(200);
+  }
+
+  const date = new Date(Date.now() + 2 * 86400000).toISOString().slice(0, 10);
+  const weekday = new Date(`${date}T12:00:00Z`).getUTCDay();
+  db.prepare(`INSERT OR IGNORE INTO horarios (consultorio_id,usuario_id,dia_semana,hora_inicio,hora_fin) VALUES (?,?,?,'09:00','10:00')`).run(fixture.clinicId, fixture.doctorId, weekday);
+  const fixed = await doctor.post('/api/servicios').send({ nombre: 'Por Definir Dashboard', precio_bs: 30 }).expect(201);
+  const monthStart = new Date();
+  const inicioCita = `${monthStart.getFullYear()}-${String(monthStart.getMonth() + 1).padStart(2, '0')}-02T13:00:00.000Z`;
+  const finCita = `${monthStart.getFullYear()}-${String(monthStart.getMonth() + 1).padStart(2, '0')}-02T13:30:00.000Z`;
+  db.prepare(`DELETE FROM citas WHERE consultorio_id=? AND motivo='DASHBOARD-POR-DEFINIR'`).run(fixture.clinicId);
+  const dashboardBefore = await doctor.get('/api/dashboard').expect(200);
+  const inserted = db.prepare(`INSERT INTO citas (consultorio_id,paciente_id,doctor_id,servicio_id,inicio,fin,estado,precio_bs,creado_por,motivo)
+    VALUES (?,?,?,?,?,?,'atendida',NULL,?,?)`).run(fixture.clinicId, fixture.patientId, fixture.doctorId, fixed.body.id,
+    inicioCita, finCita, fixture.doctorId, 'DASHBOARD-POR-DEFINIR');
+  const dashboardAfter = await doctor.get('/api/dashboard').expect(200);
+  assert.ok(dashboardAfter.body.resumen.por_definir >= dashboardBefore.body.resumen.por_definir + 1, 'debe contarse la cita atendida sin precio');
+  db.prepare('DELETE FROM citas WHERE id=?').run(inserted.lastInsertRowid);
+  await doctor.delete(`/api/servicios/${fixed.body.id}`).expect(200);
 });
 
 test('operativo agenda manualmente una visita y genera notificación y auditoría', async () => {
@@ -482,4 +566,117 @@ test('un superadmin que tenía rol paciente recupera el portal de doctor', async
   const row = db.prepare('SELECT rol, google_sub FROM usuarios WHERE id=?').get(user.id);
   assert.equal(row.rol, 'doctor');
   assert.equal(row.google_sub, `sub-admin-${userId}`);
+});
+
+test('cotizaciones: servicios del catálogo con o sin precio, edición y aislamiento por consultorio', async () => {
+  const doctor = request.agent(app);
+  await doctor.post('/api/auth/desarrollo').send({ email: 'integration-doctor@test.local' }).expect(200);
+  const codigo = `${Date.now()}${Math.floor(Math.random() * 1000).toString().padStart(3, '0')}`;
+  const patient = await doctor.post('/api/pacientes').send({ codigo, nombres: 'Cotizable', apellidos: 'Paciente' }).expect(201);
+  const patientId = patient.body.paciente.id;
+  const extraServiceId = Number(db.prepare(`INSERT INTO servicios (consultorio_id,nombre,precio_bs,duracion_min)
+    VALUES (?,?,0,60)`).run(fixture.clinicId, 'Ortodoncia').lastInsertRowid);
+
+  const created = await doctor.post('/api/presupuestos').send({
+    paciente_id: patientId,
+    titulo: 'Plan integral',
+    items: [
+      { servicio_id: fixture.serviceId, cantidad: 2, precio_bs: 120 },
+      { servicio_id: extraServiceId },
+      { nombre: 'Férula de descarga', cantidad: 1, duracion_min: 45 },
+    ],
+  }).expect(201);
+  const quoteId = created.body.id;
+
+  const detail = await doctor.get(`/api/presupuestos/${quoteId}`).expect(200);
+  assert.equal(detail.body.presupuesto.paciente_id, patientId);
+  assert.equal(detail.body.presupuesto.estado, 'borrador');
+  assert.equal(detail.body.presupuesto.items.length, 3);
+  const priced = detail.body.presupuesto.items.find((item) => item.servicio_id === fixture.serviceId);
+  assert.equal(priced.nombre, 'Integration Service');
+  assert.equal(priced.cantidad, 2);
+  assert.equal(priced.precio_bs, 120);
+  const unpriced = detail.body.presupuesto.items.find((item) => item.servicio_id === extraServiceId);
+  assert.equal(unpriced.precio_bs, null);
+  assert.equal(detail.body.presupuesto.resumen.total_bs, 240);
+  assert.equal(detail.body.presupuesto.resumen.sin_precio, 2);
+
+  await doctor.patch(`/api/presupuestos/${quoteId}/estado`).send({ estado: 'entregado' }).expect(200);
+  await doctor.patch(`/api/presupuestos/${quoteId}/estado`).send({ estado: 'aceptado' }).expect(200);
+  await doctor.patch(`/api/presupuestos/${quoteId}/estado`).send({ estado: 'invalido' }).expect(400);
+  assert.equal(db.prepare('SELECT estado FROM presupuestos WHERE id=?').get(quoteId).estado, 'aceptado');
+
+  await doctor.patch(`/api/presupuestos/${quoteId}`).send({
+    titulo: 'Plan ajustado',
+    items: [{ servicio_id: fixture.serviceId, precio_bs: 150 }],
+  }).expect(200);
+  const after = await doctor.get(`/api/presupuestos/${quoteId}`).expect(200);
+  assert.equal(after.body.presupuesto.titulo, 'Plan ajustado');
+  assert.equal(after.body.presupuesto.items.length, 1);
+  assert.equal(after.body.presupuesto.resumen.total_bs, 150);
+  assert.equal(after.body.presupuesto.resumen.sin_precio, 0);
+
+  await doctor.post('/api/presupuestos').send({ paciente_id: patientId, items: [] }).expect(400);
+  await doctor.post('/api/presupuestos').send({ paciente_id: patientId }).expect(400);
+  await doctor.post('/api/presupuestos').send({ paciente_id: fixture.foreignPatientId, items: [{ nombre: 'X' }] }).expect(404);
+
+  const list = await doctor.get('/api/presupuestos').query({ paciente_id: patientId, estado: 'aceptado' }).expect(200);
+  assert.ok(list.body.presupuestos.some((quote) => quote.id === quoteId));
+  assert.equal(typeof list.body.presupuestos[0].resumen.total_bs, 'number');
+
+  assert.ok(db.prepare(`SELECT id FROM auditoria WHERE entidad_tipo='presupuesto' AND entidad_id=? AND accion='crear'`).get(quoteId));
+  assert.ok(db.prepare(`SELECT id FROM auditoria WHERE entidad_tipo='presupuesto' AND entidad_id=? AND accion='cambiar_estado'`).get(quoteId));
+
+  const operative = request.agent(app);
+  await operative.post('/api/auth/desarrollo').send({ email: 'integration-operative@test.local' }).expect(200);
+  const byOperative = await operative.post('/api/presupuestos').send({ paciente_id: patientId, items: [{ nombre: 'Evaluación inicial' }] }).expect(201);
+  await operative.delete(`/api/presupuestos/${byOperative.body.id}`).expect(200);
+  assert.ok(db.prepare('SELECT eliminado_en FROM presupuestos WHERE id=?').get(byOperative.body.id).eliminado_en);
+
+  const foreign = request.agent(app);
+  await foreign.post('/api/auth/desarrollo').send({ email: 'foreign-doctor@test.local' }).expect(200);
+  await foreign.get(`/api/presupuestos/${quoteId}`).expect(404);
+  await foreign.patch(`/api/presupuestos/${quoteId}`).send({ titulo: 'Ajeno' }).expect(404);
+  await foreign.patch(`/api/presupuestos/${quoteId}/estado`).send({ estado: 'aceptado' }).expect(404);
+  const foreignList = await foreign.get('/api/presupuestos').expect(200);
+  assert.equal(foreignList.body.presupuestos.length, 0);
+});
+
+test('mantenimiento: limpia notificaciones, auditoría, huérfanos en uploads y aplica WAL checkpoint', async () => {
+  const { runMaintenance } = await import('../src/maintenance.js');
+  const { config } = await import('../src/config.js');
+  const oldDate = new Date(Date.now() - 200 * 86400000).toISOString().slice(0, 19).replace('T', ' ');
+  const recentDate = new Date(Date.now() - 5 * 86400000).toISOString().slice(0, 19).replace('T', ' ');
+
+  const oldNotif = db.prepare(`INSERT INTO notificaciones (consultorio_id, usuario_id, tipo, titulo, mensaje, creado_en)
+    VALUES (?, ?, 'm', 'm', 'm', ?)`).run(fixture.clinicId, fixture.doctorId, oldDate).lastInsertRowid;
+  const newNotif = db.prepare(`INSERT INTO notificaciones (consultorio_id, usuario_id, tipo, titulo, mensaje, creado_en)
+    VALUES (?, ?, 'm', 'm', 'm', ?)`).run(fixture.clinicId, fixture.doctorId, recentDate).lastInsertRowid;
+  const oldAudit = db.prepare(`INSERT INTO auditoria (consultorio_id, usuario_id, accion, entidad_tipo, creado_en)
+    VALUES (?, ?, 'm', 'm', ?)`).run(fixture.clinicId, fixture.doctorId, oldDate).lastInsertRowid;
+  const newAudit = db.prepare(`INSERT INTO auditoria (consultorio_id, usuario_id, accion, entidad_tipo, creado_en)
+    VALUES (?, ?, 'm', 'm', ?)`).run(fixture.clinicId, fixture.doctorId, recentDate).lastInsertRowid;
+
+  fs.mkdirSync(config.uploadDir, { recursive: true });
+  const orphanName = `orphan-test-${Date.now()}.png`;
+  const orphanPath = path.join(config.uploadDir, orphanName);
+  fs.writeFileSync(orphanPath, Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]));
+
+  try {
+    const pasos = runMaintenance({ auditoriaDays: 100, notificacionesDays: 90, vacuum: false });
+    assert.ok(/eliminadas/.test(pasos.notificaciones), `notificaciones: ${pasos.notificaciones}`);
+    assert.ok(/eliminadas/.test(pasos.auditoria), `auditoria: ${pasos.auditoria}`);
+    assert.ok(/huérfanos/.test(pasos.uploads), `uploads: ${pasos.uploads}`);
+    assert.ok(/OK|truncado/.test(pasos.wal_checkpoint), `wal: ${pasos.wal_checkpoint}`);
+
+    assert.equal(db.prepare('SELECT id FROM notificaciones WHERE id=?').get(oldNotif), undefined);
+    assert.ok(db.prepare('SELECT id FROM notificaciones WHERE id=?').get(newNotif));
+    assert.equal(db.prepare('SELECT id FROM auditoria WHERE id=?').get(oldAudit), undefined);
+    assert.ok(db.prepare('SELECT id FROM auditoria WHERE id=?').get(newAudit));
+    assert.equal(fs.existsSync(orphanPath), false, 'huérfano debe ser eliminado');
+  } finally {
+    if (fs.existsSync(orphanPath)) fs.unlinkSync(orphanPath);
+    db.prepare('DELETE FROM notificaciones WHERE id IN (?, ?)').run(oldNotif, newNotif);
+    db.prepare('DELETE FROM auditoria WHERE id IN (?, ?)').run(oldAudit, newAudit);
+  }
 });

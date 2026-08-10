@@ -36,6 +36,11 @@ export const config = {
     cron: process.env.BACKUP_CRON || '0 3 * * *',
     retention: Math.max(1, Number(process.env.BACKUP_RETENTION_LOCAL || 3)),
     dirName: 'backups'
+  },
+  maintenance: {
+    cron: process.env.MAINTENANCE_CRON || '0 4 * * 0',
+    auditoriaDays: Math.max(30, Number(process.env.MAINTENANCE_AUDITORIA_DIAS || 365)),
+    notificacionesDays: Math.max(7, Number(process.env.MAINTENANCE_NOTIFICACIONES_DIAS || 90)),
   }
 };
 

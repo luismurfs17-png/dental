@@ -37,6 +37,13 @@ function hasValidImageSignature(file) {
 }
 
 const tenant = (req) => req.user.consultorio_id;
+const clinicMode = (req) => db.prepare('SELECT modo_cobro FROM consultorios WHERE id=?').get(tenant(req))?.modo_cobro || 'mixto';
+const servicePrice = (value) => {
+  if (value === undefined || value === null || value === '') return null;
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed) || parsed < 0) throw new ApiError(400, 'precio_bs debe ser un número mayor o igual a cero');
+  return parsed;
+};
 const id = (value) => {
   const parsed = Number(value);
   if (!Number.isInteger(parsed) || parsed < 1) throw new ApiError(400, 'Identificador inválido');
@@ -93,9 +100,12 @@ router.get('/consultorio', (req, res) => {
 router.patch('/consultorio', allowRoles('doctor'), (req, res) => {
   const current = db.prepare('SELECT * FROM consultorios WHERE id = ? AND eliminado_en IS NULL').get(tenant(req));
   if (!current) throw new ApiError(404, 'Consultorio no encontrado');
-  const fields = ['nombre', 'nit', 'telefono', 'email', 'direccion', 'zona_horaria'];
+  if (req.body.modo_cobro !== undefined && !['app', 'definir', 'mixto'].includes(req.body.modo_cobro)) {
+    throw new ApiError(400, 'Modo de cobro inválido');
+  }
+  const fields = ['nombre', 'nit', 'telefono', 'email', 'direccion', 'zona_horaria', 'modo_cobro'];
   const values = fields.map((field) => req.body[field] ?? current[field]);
-  db.prepare(`UPDATE consultorios SET nombre=?, nit=?, telefono=?, email=?, direccion=?, zona_horaria=?, actualizado_en=CURRENT_TIMESTAMP WHERE id=?`)
+  db.prepare(`UPDATE consultorios SET nombre=?, nit=?, telefono=?, email=?, direccion=?, zona_horaria=?, modo_cobro=?, actualizado_en=CURRENT_TIMESTAMP WHERE id=?`)
     .run(...values, tenant(req));
   log(req, 'actualizar', 'consultorio', tenant(req), req.body);
   const updated = db.prepare('SELECT * FROM consultorios WHERE id=?').get(tenant(req));
@@ -389,8 +399,9 @@ router.get('/disponibilidad', (req, res) => {
   res.json({ disponibilidad: slots, horarios: allSlots });
 });
 router.post('/servicios', allowRoles('doctor'), (req, res) => {
-  required(req.body, ['nombre', 'precio_bs']);
-  const price = positiveNumber(req.body.precio_bs, 'precio_bs');
+  required(req.body, ['nombre']);
+  const price = servicePrice(req.body.precio_bs);
+  if (clinicMode(req) === 'app' && price === null) throw new ApiError(400, 'En modo de cobro por la app, el precio del tratamiento es obligatorio');
   const result = db.prepare(`INSERT INTO servicios (consultorio_id,nombre,descripcion,precio_bs,duracion_min)
     VALUES (?,?,?,?,?)`).run(tenant(req), req.body.nombre, req.body.descripcion || null, price, Number(req.body.duracion_min || 30));
   log(req, 'crear', 'servicio', result.lastInsertRowid, req.body);
@@ -400,9 +411,11 @@ router.patch('/servicios/:id', allowRoles('doctor'), (req, res) => {
   const serviceId = id(req.params.id);
   const current = db.prepare(`SELECT * FROM servicios WHERE id=? AND consultorio_id=? AND eliminado_en IS NULL`).get(serviceId, tenant(req));
   if (!current) throw new ApiError(404, 'Servicio no encontrado');
+  const price = req.body.precio_bs === undefined ? current.precio_bs : servicePrice(req.body.precio_bs);
+  if (clinicMode(req) === 'app' && price === null) throw new ApiError(400, 'En modo de cobro por la app, el precio del tratamiento es obligatorio');
   db.prepare(`UPDATE servicios SET nombre=?,descripcion=?,precio_bs=?,duracion_min=?,activo=?,actualizado_en=CURRENT_TIMESTAMP
     WHERE id=? AND consultorio_id=?`).run(req.body.nombre ?? current.nombre, req.body.descripcion ?? current.descripcion,
-    req.body.precio_bs === undefined ? current.precio_bs : positiveNumber(req.body.precio_bs, 'precio_bs'),
+    price,
     Number(req.body.duracion_min ?? current.duracion_min), req.body.activo === undefined ? current.activo : Number(Boolean(req.body.activo)),
     serviceId, tenant(req));
   log(req, 'actualizar', 'servicio', serviceId, req.body);
@@ -415,6 +428,136 @@ router.delete('/servicios/:id', allowRoles('doctor'), (req, res) => {
   ensureFound(result, 'Servicio no encontrado');
   log(req, 'eliminar_logico', 'servicio', serviceId);
   res.json({ mensaje: 'Servicio archivado correctamente' });
+});
+
+const QUOTE_STATES = ['borrador', 'entregado', 'aceptado', 'archivado'];
+const parseQuoteItems = (req) => {
+  if (req.body.items === undefined) return null;
+  if (!Array.isArray(req.body.items) || req.body.items.length > 50)
+    throw new ApiError(400, 'Los servicios deben ser una lista de hasta 50 elementos');
+  return req.body.items.map((item, position) => {
+    let serviceId = null;
+    let name = String(item.nombre || '').trim();
+    if (item.servicio_id !== undefined && item.servicio_id !== null && item.servicio_id !== '') {
+      serviceId = id(item.servicio_id);
+      const service = db.prepare(`SELECT nombre FROM servicios WHERE id=? AND consultorio_id=? AND eliminado_en IS NULL`)
+        .get(serviceId, tenant(req));
+      if (!service) throw new ApiError(404, 'Servicio de catálogo no encontrado');
+      if (!name) name = service.nombre;
+    }
+    if (!name) throw new ApiError(400, 'Cada servicio del presupuesto requiere nombre');
+    if (name.length > 200) throw new ApiError(400, 'El nombre del servicio no puede superar 200 caracteres');
+    let price = null;
+    if (item.precio_bs !== undefined && item.precio_bs !== null && item.precio_bs !== '') {
+      const parsedPrice = Number(item.precio_bs);
+      if (!Number.isFinite(parsedPrice) || parsedPrice < 0) throw new ApiError(400, 'El precio debe ser un número mayor o igual a cero');
+      price = parsedPrice;
+    }
+    const amount = item.cantidad === undefined ? 1 : Number(item.cantidad);
+    if (!Number.isInteger(amount) || amount < 1 || amount > 999) throw new ApiError(400, 'La cantidad debe ser un entero entre 1 y 999');
+    let duration = null;
+    if (item.duracion_min !== undefined && item.duracion_min !== null && item.duracion_min !== '') {
+      const parsedDuration = Number(item.duracion_min);
+      if (!Number.isInteger(parsedDuration) || parsedDuration < 1) throw new ApiError(400, 'La duración debe ser un entero mayor que cero');
+      duration = parsedDuration;
+    }
+    return { serviceId, name, amount, price, duration, notes: String(item.notas || '').trim().slice(0, 500) || null, position };
+  });
+};
+const replaceQuoteItems = (quoteId, clinicId, items) => {
+  db.prepare(`UPDATE presupuesto_items SET eliminado_en=CURRENT_TIMESTAMP WHERE presupuesto_id=? AND eliminado_en IS NULL`).run(quoteId);
+  const insert = db.prepare(`INSERT INTO presupuesto_items (presupuesto_id,servicio_id,nombre,cantidad,precio_bs,duracion_min,notas,posicion)
+    VALUES (?,?,?,?,?,?,?,?)`);
+  for (const item of items) insert.run(quoteId, item.serviceId, item.name, item.amount, item.price, item.duration, item.notes, item.position);
+};
+const quoteSummary = (quoteId) => db.prepare(`SELECT
+    COUNT(*) total_items,
+    COALESCE(SUM(CASE WHEN precio_bs IS NULL THEN 0 ELSE precio_bs * cantidad END), 0) total_bs,
+    COALESCE(SUM(CASE WHEN precio_bs IS NULL THEN 1 ELSE 0 END), 0) sin_precio
+  FROM presupuesto_items WHERE presupuesto_id=? AND eliminado_en IS NULL`).get(quoteId);
+
+router.get('/presupuestos', allowRoles('doctor', 'operativo'), (req, res) => {
+  const conditions = ['pr.consultorio_id=?', 'pr.eliminado_en IS NULL'];
+  const values = [tenant(req)];
+  if (req.query.paciente_id) { conditions.push('pr.paciente_id=?'); values.push(id(req.query.paciente_id)); }
+  if (req.query.estado) {
+    if (!QUOTE_STATES.includes(req.query.estado)) throw new ApiError(400, 'Estado de presupuesto inválido');
+    conditions.push('pr.estado=?'); values.push(req.query.estado);
+  }
+  const rows = db.prepare(`SELECT pr.*,p.codigo,p.nombres,p.apellidos,p.telefono,u.nombre creado_por_nombre
+    FROM presupuestos pr
+    JOIN pacientes p ON p.id=pr.paciente_id AND p.consultorio_id=pr.consultorio_id
+    JOIN usuarios u ON u.id=pr.creado_por AND u.consultorio_id=pr.consultorio_id
+    WHERE ${conditions.join(' AND ')} ORDER BY pr.creado_en DESC LIMIT 500`).all(...values);
+  res.json({ presupuestos: rows.map((row) => ({ ...row, resumen: quoteSummary(row.id) })) });
+});
+router.post('/presupuestos', allowRoles('doctor', 'operativo'), (req, res) => {
+  required(req.body, ['paciente_id']);
+  const patientId = id(req.body.paciente_id);
+  const patient = db.prepare(`SELECT id FROM pacientes WHERE id=? AND consultorio_id=? AND eliminado_en IS NULL`).get(patientId, tenant(req));
+  if (!patient) throw new ApiError(404, 'Paciente no encontrado');
+  const items = parseQuoteItems(req);
+  if (!items || !items.length) throw new ApiError(400, 'El presupuesto requiere al menos un servicio');
+  const quoteId = db.transaction(() => {
+    const result = db.prepare(`INSERT INTO presupuestos (consultorio_id,paciente_id,titulo,notas,estado,creado_por)
+      VALUES (?,?,?,?,'borrador',?)`).run(tenant(req), patientId,
+      req.body.titulo ? String(req.body.titulo).trim().slice(0, 120) : null,
+      req.body.notas ? String(req.body.notas).trim().slice(0, 2000) : null, req.user.id);
+    replaceQuoteItems(result.lastInsertRowid, tenant(req), items);
+    return result.lastInsertRowid;
+  })();
+  log(req, 'crear', 'presupuesto', quoteId, { paciente_id: patientId, titulo: req.body.titulo, items: items.map((item) => ({ nombre: item.name, precio_bs: item.price })) }, patientId);
+  res.status(201).json({ mensaje: 'Presupuesto creado correctamente', id: quoteId });
+});
+router.get('/presupuestos/:id', allowRoles('doctor', 'operativo'), (req, res) => {
+  const quoteId = id(req.params.id);
+  const quote = db.prepare(`SELECT pr.*,p.codigo,p.nombres,p.apellidos,u.nombre creado_por_nombre
+    FROM presupuestos pr
+    JOIN pacientes p ON p.id=pr.paciente_id AND p.consultorio_id=pr.consultorio_id
+    JOIN usuarios u ON u.id=pr.creado_por AND u.consultorio_id=pr.consultorio_id
+    WHERE pr.id=? AND pr.consultorio_id=? AND pr.eliminado_en IS NULL`).get(quoteId, tenant(req));
+  if (!quote) throw new ApiError(404, 'Presupuesto no encontrado');
+  const items = db.prepare(`SELECT * FROM presupuesto_items WHERE presupuesto_id=? AND eliminado_en IS NULL ORDER BY posicion,id`).all(quoteId);
+  res.json({ presupuesto: { ...quote, resumen: quoteSummary(quoteId), items } });
+});
+router.patch('/presupuestos/:id', allowRoles('doctor', 'operativo'), (req, res) => {
+  const quoteId = id(req.params.id);
+  const current = db.prepare(`SELECT * FROM presupuestos WHERE id=? AND consultorio_id=? AND eliminado_en IS NULL`).get(quoteId, tenant(req));
+  if (!current) throw new ApiError(404, 'Presupuesto no encontrado');
+  const items = parseQuoteItems(req);
+  db.transaction(() => {
+    db.prepare(`UPDATE presupuestos SET titulo=?,notas=?,actualizado_en=CURRENT_TIMESTAMP WHERE id=? AND consultorio_id=?`).run(
+      req.body.titulo === undefined ? current.titulo : String(req.body.titulo).trim().slice(0, 120) || null,
+      req.body.notas === undefined ? current.notas : String(req.body.notas).trim().slice(0, 2000) || null,
+      quoteId, tenant(req));
+    if (items !== null) replaceQuoteItems(quoteId, tenant(req), items);
+  })();
+  const auditData = items !== null
+    ? { ...(req.body.titulo !== undefined ? { titulo: req.body.titulo } : {}), items: items.map((item) => ({ nombre: item.name, precio_bs: item.price })) }
+    : { ...(req.body.titulo !== undefined ? { titulo: req.body.titulo } : {}) };
+  log(req, 'actualizar', 'presupuesto', quoteId, auditData, current.paciente_id);
+  res.json({ mensaje: 'Presupuesto actualizado correctamente' });
+});
+router.patch('/presupuestos/:id/estado', allowRoles('doctor', 'operativo'), (req, res) => {
+  if (!QUOTE_STATES.includes(req.body.estado)) throw new ApiError(400, 'Estado de presupuesto inválido');
+  const quoteId = id(req.params.id);
+  const quote = db.prepare(`SELECT paciente_id FROM presupuestos WHERE id=? AND consultorio_id=? AND eliminado_en IS NULL`).get(quoteId, tenant(req));
+  if (!quote) throw new ApiError(404, 'Presupuesto no encontrado');
+  const result = db.prepare(`UPDATE presupuestos SET estado=?,actualizado_en=CURRENT_TIMESTAMP
+    WHERE id=? AND consultorio_id=? AND eliminado_en IS NULL`).run(req.body.estado, quoteId, tenant(req));
+  ensureFound(result, 'Presupuesto no encontrado');
+  log(req, 'cambiar_estado', 'presupuesto', quoteId, { estado: req.body.estado }, quote.paciente_id);
+  res.json({ mensaje: 'Estado del presupuesto actualizado' });
+});
+router.delete('/presupuestos/:id', allowRoles('doctor', 'operativo'), (req, res) => {
+  const quoteId = id(req.params.id);
+  const quote = db.prepare(`SELECT paciente_id FROM presupuestos WHERE id=? AND consultorio_id=? AND eliminado_en IS NULL`).get(quoteId, tenant(req));
+  if (!quote) throw new ApiError(404, 'Presupuesto no encontrado');
+  const result = db.prepare(`UPDATE presupuestos SET eliminado_en=CURRENT_TIMESTAMP,actualizado_en=CURRENT_TIMESTAMP
+    WHERE id=? AND consultorio_id=? AND eliminado_en IS NULL`).run(quoteId, tenant(req));
+  ensureFound(result, 'Presupuesto no encontrado');
+  log(req, 'eliminar_logico', 'presupuesto', quoteId, undefined, quote.paciente_id);
+  res.json({ mensaje: 'Presupuesto archivado correctamente' });
 });
 
 router.get('/horarios', (req, res) => {
@@ -857,6 +1000,8 @@ router.get('/dashboard', (req, res) => {
     (SELECT COUNT(*) FROM pacientes WHERE consultorio_id=@clinicId AND eliminado_en IS NULL) pacientes,
     (SELECT COUNT(*) FROM citas WHERE consultorio_id=@clinicId AND date(inicio)=date('now') AND eliminado_en IS NULL${doctorFilter}) citas_hoy,
     (SELECT COUNT(*) FROM pagos WHERE consultorio_id=@clinicId AND estado='por_verificar' AND eliminado_en IS NULL) pagos_por_verificar,
+    (SELECT COUNT(*) FROM citas WHERE consultorio_id=@clinicId AND estado='atendida' AND precio_bs IS NULL
+      AND eliminado_en IS NULL AND date(inicio)>=date('now','start of month')${doctorFilter}) por_definir,
     (SELECT COALESCE(SUM(monto_bs),0) FROM pagos WHERE consultorio_id=@clinicId AND estado='valido' AND eliminado_en IS NULL AND date(creado_en)=date('now')) ingresos_hoy`)
     .get({ clinicId, usuarioId: req.user.id });
   res.json({ resumen: stats, moneda: 'Bs' });

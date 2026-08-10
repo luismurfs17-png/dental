@@ -16,6 +16,7 @@ const teamNav = [
   { to: '/agenda', label: 'Agenda', icon: 'calendar' },
   { to: '/pacientes', label: 'Pacientes', icon: 'users' },
   { to: '/servicios', label: 'Tratamientos', icon: 'tooth', doctorOnly: true },
+  { to: '/presupuestos', label: 'Cotizaciones', icon: 'file' },
   { to: '/cobros', label: 'Caja y pagos', icon: 'wallet' },
   { to: '/notificaciones', label: 'Avisos', icon: 'bell' },
   { to: '/configuracion', label: 'Consultorio', icon: 'settings', doctorOnly: true },
@@ -37,7 +38,7 @@ export default function AppShell() {
   const navItems = adminOnly
     ? [adminNavItem]
     : [...baseNav.filter((item) => !item.doctorOnly || role === 'doctor'), ...(isAdmin ? [adminNavItem] : [])]
-  const mobileItems = adminOnly || isPatient ? navItems : navItems.filter((item) => ['/agenda', '/pacientes', '/cobros', '/notificaciones'].includes(item.to))
+  const mobileItems = adminOnly || isPatient ? navItems : navItems.filter((item) => ['/agenda', '/pacientes', '/presupuestos', '/cobros', '/notificaciones'].includes(item.to))
   const [mobileMenu, setMobileMenu] = useState(false)
 
   useEffect(() => setMobileMenu(false), [location.pathname])

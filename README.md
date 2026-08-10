@@ -73,7 +73,7 @@ cd ../client
 npm run build
 ```
 
-Estado verificado (agosto 2026): **15/15 tests** del servidor y build del cliente OK.
+Estado verificado (agosto 2026): **18/18 tests** del servidor y build del cliente OK.
 
 ## Demo de agenda (presentación)
 
@@ -89,7 +89,7 @@ Detalle y límites en `PROJECT_CONTEXT.md` y `DEPLOYMENT_RUNBOOK.md`.
 
 | Tema | Estado |
 |---|---|
-| Agenda, pacientes, citas, pagos QR | Operativo |
+| Agenda, pacientes, citas, pagos QR, cotizaciones | Operativo |
 | Google OAuth en producción | Operativo |
 | Correos (confirmación / recordatorio) | **Desactivado** (SMTP no configurado) |
 | Backup local (cron 03:00, retención 3) | Activo si `BACKUP_ENABLED=true` |
@@ -99,7 +99,7 @@ Detalle y límites en `PROJECT_CONTEXT.md` y `DEPLOYMENT_RUNBOOK.md`.
 | Rate limiting API | Activo |
 | Escala SQLite | Bien para 10–30 clínicas; migrar si >60–80 |
 | Réplicas | Solo 1 con SQLite |
-| Módulos futuros | WhatsApp, presupuestos, odontograma, caja, reportes, consentimiento, link público |
+| Módulos futuros | WhatsApp, presupuestos con abonos, odontograma, caja, reportes, consentimiento, link público |
 
 ## Documentación
 

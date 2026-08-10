@@ -146,7 +146,11 @@ router.get('/consultorios/:id/exportar', asyncRoute(async (req, res) => {
     citas: exportart(`SELECT * FROM citas WHERE consultorio_id = ? AND eliminado_en IS NULL`),
     registros: exportart(`SELECT * FROM registros_clinicos WHERE consultorio_id = ? AND eliminado_en IS NULL`),
     notas: exportart(`SELECT * FROM notas_paciente WHERE consultorio_id = ? AND eliminado_en IS NULL`),
-    pagos: exportart(`SELECT * FROM pagos WHERE consultorio_id = ? AND eliminado_en IS NULL`)
+    pagos: exportart(`SELECT * FROM pagos WHERE consultorio_id = ? AND eliminado_en IS NULL`),
+    presupuestos: exportart(`SELECT * FROM presupuestos WHERE consultorio_id = ? AND eliminado_en IS NULL`),
+    presupuesto_items: exportart(`SELECT pi.* FROM presupuesto_items pi
+      JOIN presupuestos pr ON pr.id = pi.presupuesto_id
+      WHERE pr.consultorio_id = ? AND pi.eliminado_en IS NULL`)
   };
   const totales = {
     usuarios: payload.usuarios.length,
@@ -156,7 +160,8 @@ router.get('/consultorios/:id/exportar', asyncRoute(async (req, res) => {
     citas: payload.citas.length,
     registros: payload.registros.length,
     notas: payload.notas.length,
-    pagos: payload.pagos.length
+    pagos: payload.pagos.length,
+    presupuestos: payload.presupuestos.length
   };
   const html = `<!doctype html><html lang="es"><head><meta charset="utf-8">
     <title>Exportación · ${consultorio.nombre}</title></head>
@@ -213,6 +218,8 @@ router.post('/consultorios/:id/reiniciar', asyncRoute(async (req, res) => {
       notificaciones: del('DELETE FROM notificaciones WHERE consultorio_id = ?'),
       citas: del('DELETE FROM citas WHERE consultorio_id = ?'),
       auditoria: del('DELETE FROM auditoria WHERE consultorio_id = ?'),
+      presupuesto_items: del(`DELETE FROM presupuesto_items WHERE presupuesto_id IN (SELECT id FROM presupuestos WHERE consultorio_id = ?)`),
+      presupuestos: del('DELETE FROM presupuestos WHERE consultorio_id = ?'),
       pacientes: del('DELETE FROM pacientes WHERE consultorio_id = ?')
     };
   })();

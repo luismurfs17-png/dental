@@ -247,6 +247,17 @@ export function Agenda() {
           note="Trabajo completado"
           icon="tooth"
         />
+        <Metric
+          label="Por definir"
+          value={
+            appointments.filter(
+              (item) => item.estado === "atendida" && item.precio_bs === null,
+            ).length
+          }
+          note="Atendidas sin precio"
+          icon="wallet"
+          tone="warm"
+        />
       </section>
       {loading ? (
         <Loading label="Organizando la semana" />
@@ -885,10 +896,12 @@ export function PatientForm({ patient, setPatient, onSubmit, saving }) {
 
 export function Services() {
   const { data, loading, error, reload } = useRemote("/servicios");
+  const clinicRemote = useRemote("/consultorio");
   const [editing, setEditing] = useState(null);
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState("");
   const services = unwrap(data, "servicios");
+  const modoCobro = clinicRemote.data?.consultorio?.modo_cobro || "mixto";
   const emptyService = {
     nombre: "",
     precio_bs: "",
@@ -952,11 +965,11 @@ export function Services() {
                 <p>{service.descripcion}</p>
               </div>
               <div className="service-price">
-                <strong>{formatMoney(service.precio_bs)}</strong>
+                <strong>{service.precio_bs === null ? "A definir" : formatMoney(service.precio_bs)}</strong>
                 <span>{service.duracion_min} min</span>
               </div>
               <div className="card-actions">
-                <button onClick={() => setEditing(service)}>Editar</button>
+                <button onClick={() => setEditing({ ...service, precio_bs: service.precio_bs ?? "" })}>Editar</button>
                 <button className="danger" onClick={() => remove(service)}>
                   Desactivar
                 </button>
@@ -985,7 +998,10 @@ export function Services() {
                 required
               />
             </Field>
-            <Field label="Precio (Bs)">
+            <Field
+              label="Precio (Bs)"
+              hint={modoCobro === "app" ? "Obligatorio en modo cobro por la app." : "Vacío si el precio se define en la consulta."}
+            >
               <input
                 type="number"
                 min="0"
@@ -994,7 +1010,7 @@ export function Services() {
                 onChange={(e) =>
                   setEditing({ ...editing, precio_bs: e.target.value })
                 }
-                required
+                required={modoCobro === "app"}
               />
             </Field>
             <Field label="Duración">
@@ -1037,9 +1053,23 @@ export function PaymentsDesk() {
   const paymentsRemote = useRemote(query);
   const patientsRemote = useRemote("/pacientes");
   const [cashOpen, setCashOpen] = useState(false);
-  const [cash, setCash] = useState({ paciente_id: "", monto_bs: "" });
+  const [cash, setCash] = useState({ paciente_id: "", monto_bs: "", cita_id: "" });
+  const [cashCitas, setCashCitas] = useState([]);
   const [message, setMessage] = useState("");
   const payments = unwrap(paymentsRemote.data, "pagos");
+  async function loadCashCitas(pacienteId) {
+    setCash((current) => ({ ...current, paciente_id: pacienteId, cita_id: "" }));
+    if (!pacienteId) { setCashCitas([]); return; }
+    try {
+      const result = await api(`/citas?paciente_id=${encodeURIComponent(pacienteId)}`);
+      const citas = unwrap(result, "citas")
+        .filter((cita) => cita.estado === "confirmada" || cita.estado === "atendida")
+        .sort((a, b) => String(b.inicio).localeCompare(String(a.inicio)));
+      setCashCitas(citas);
+    } catch {
+      setCashCitas([]);
+    }
+  }
   async function verify(payment, estado) {
     try {
       await api(`/pagos/${payment.id}/verificacion`, {
@@ -1060,7 +1090,8 @@ export function PaymentsDesk() {
         body: { ...cash, metodo: "efectivo" },
       });
       setCashOpen(false);
-      setCash({ paciente_id: "", monto_bs: "" });
+      setCash({ paciente_id: "", monto_bs: "", cita_id: "" });
+      setCashCitas([]);
       setMessage("Cobro registrado.");
       paymentsRemote.reload();
     } catch (error) {
@@ -1154,15 +1185,26 @@ export function PaymentsDesk() {
             <Field label="Paciente">
               <select
                 value={cash.paciente_id}
-                onChange={(e) =>
-                  setCash({ ...cash, paciente_id: e.target.value })
-                }
+                onChange={(e) => loadCashCitas(e.target.value)}
                 required
               >
                 <option value="">Selecciona</option>
                 {unwrap(patientsRemote.data, "pacientes").map((patient) => (
                   <option value={patient.id} key={patient.id}>
                     {patient.codigo} - {patient.nombres} {patient.apellidos}
+                  </option>
+                ))}
+              </select>
+            </Field>
+            <Field label="Cita (opcional)">
+              <select
+                value={cash.cita_id || ""}
+                onChange={(e) => setCash({ ...cash, cita_id: e.target.value })}
+              >
+                <option value="">Pago general (sin cita)</option>
+                {cashCitas.map((cita) => (
+                  <option value={cita.id} key={cita.id}>
+                    {formatDate(cita.inicio)} · {cita.servicio}
                   </option>
                 ))}
               </select>
