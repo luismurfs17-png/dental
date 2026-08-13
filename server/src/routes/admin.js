@@ -29,7 +29,7 @@ function adminLog(user, accion, entidadTipo, entidadId, datos, ip) {
 const userById = (userId) => db.prepare(`SELECT id, consultorio_id, email, nombre, rol, estado
   FROM usuarios WHERE id = ? AND eliminado_en IS NULL`).get(userId);
 
-const clinicById = (clinicId) => db.prepare(`SELECT id, nombre, email, qr_path FROM consultorios
+const clinicById = (clinicId) => db.prepare(`SELECT id, nombre, email, slug, qr_path, logo_path, fondo_path FROM consultorios
   WHERE id = ? AND eliminado_en IS NULL`).get(clinicId);
 
 function clinicActivity(clinic) {
@@ -184,7 +184,9 @@ router.get('/consultorios/:id/exportar', asyncRoute(async (req, res) => {
   const files = [
     ...db.prepare(`SELECT evidencia_path AS ruta, id FROM pagos
       WHERE consultorio_id = ? AND evidencia_path IS NOT NULL AND eliminado_en IS NULL`).all(clinicId),
-    { ruta: consultorio.qr_path, base: 'QR.png' }
+    { ruta: consultorio.qr_path, base: consultorio.qr_path ? `QR${path.extname(consultorio.qr_path)}` : null },
+    { ruta: consultorio.logo_path, base: consultorio.logo_path ? `Logo${path.extname(consultorio.logo_path)}` : null },
+    { ruta: consultorio.fondo_path, base: consultorio.fondo_path ? `Fondo${path.extname(consultorio.fondo_path)}` : null }
   ].filter((file) => file.ruta);
   const used = new Set();
   for (const file of files) {
@@ -301,7 +303,8 @@ router.delete('/usuarios/:id', (req, res) => {
   const user = userById(id(req.params.id));
   if (!user) throw new ApiError(404, 'Usuario no encontrado');
   if (config.adminEmails.includes(user.email.toLowerCase())) throw new ApiError(400, 'No puede eliminar al administrador');
-  db.prepare(`UPDATE usuarios SET eliminado_en = CURRENT_TIMESTAMP, actualizado_en = CURRENT_TIMESTAMP WHERE id = ?`).run(user.id);
+  db.prepare(`UPDATE usuarios SET estado='suspendido', google_sub=NULL, eliminado_en=CURRENT_TIMESTAMP,
+    actualizado_en=CURRENT_TIMESTAMP WHERE id=?`).run(user.id);
   adminLog(req.user, 'eliminar', 'usuario', user.id, { email: user.email }, req.ip);
   res.json({ mensaje: 'Usuario eliminado; ya no podrá acceder' });
 });
@@ -311,7 +314,7 @@ router.delete('/consultorios/:id', (req, res) => {
   if (!clinic) throw new ApiError(404, 'Consultorio no encontrado');
   db.transaction(() => {
     db.prepare(`UPDATE consultorios SET eliminado_en = CURRENT_TIMESTAMP, actualizado_en = CURRENT_TIMESTAMP WHERE id = ?`).run(clinic.id);
-    db.prepare(`UPDATE usuarios SET eliminado_en = CURRENT_TIMESTAMP, actualizado_en = CURRENT_TIMESTAMP
+    db.prepare(`UPDATE usuarios SET estado='suspendido', google_sub=NULL, eliminado_en=CURRENT_TIMESTAMP, actualizado_en=CURRENT_TIMESTAMP
       WHERE consultorio_id = ? AND eliminado_en IS NULL`).run(clinic.id);
   })();
   adminLog(req.user, 'eliminar', 'consultorio', clinic.id, { nombre: clinic.nombre }, req.ip);

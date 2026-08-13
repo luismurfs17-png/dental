@@ -5,7 +5,8 @@ import { Router } from 'express';
 import multer from 'multer';
 import { authenticate, allowRoles, requireTenant } from '../auth.js';
 import { config } from '../config.js';
-import { audit, db } from '../db.js';
+import { audit, db, uniqueClinicSlug } from '../db.js';
+import { createClinicIcons, removeClinicIcons, validateClinicImage } from '../branding.js';
 import { sendAppointmentEmail } from '../email.js';
 import { ApiError, positiveNumber, required } from '../http.js';
 
@@ -13,10 +14,11 @@ const router = Router();
 router.get('/presupuestos/publico/:token', (req, res) => {
   const match = lookupQuoteToken(req.params.token);
   if (!match) throw new ApiError(404, 'Cotización no encontrada o ya no está disponible');
-  const quote = db.prepare(`SELECT pr.*, p.codigo, p.nombres, p.apellidos, c.nombre consultorio, c.telefono consultorio_telefono
+  const quote = db.prepare(`SELECT pr.*, p.codigo, p.nombres, p.apellidos, c.nombre consultorio,
+      c.marca_nombre, c.color_primario, c.color_acento, c.color_fondo, c.logo_path, c.slug, c.telefono consultorio_telefono
     FROM presupuestos pr
-    JOIN pacientes p ON p.id=pr.paciente_id AND p.consultorio_id=pr.consultorio_id
-    JOIN consultorios c ON c.id=pr.consultorio_id
+    JOIN pacientes p ON p.id=pr.paciente_id AND p.consultorio_id=pr.consultorio_id AND p.eliminado_en IS NULL
+    JOIN consultorios c ON c.id=pr.consultorio_id AND c.eliminado_en IS NULL
     WHERE pr.id=? AND pr.consultorio_id=? AND pr.eliminado_en IS NULL`).get(match.id, match.consultorio_id);
   if (!quote || quote.estado === 'borrador' || quote.estado === 'archivado')
     throw new ApiError(404, 'Cotización no disponible para compartir');
@@ -42,7 +44,15 @@ router.get('/presupuestos/publico/:token', (req, res) => {
        pago: quotePayments(quote.id),
      },
     paciente: { codigo: quote.codigo, nombres: quote.nombres, apellidos: quote.apellidos },
-    consultorio: { nombre: quote.consultorio, telefono: quote.consultorio_telefono },
+    consultorio: {
+      nombre: quote.consultorio,
+      marca_nombre: quote.marca_nombre,
+      telefono: quote.consultorio_telefono,
+      color_primario: quote.color_primario,
+      color_acento: quote.color_acento,
+      color_fondo: quote.color_fondo,
+      logo_url: quote.logo_path ? `/api/publico/clinicas/${quote.slug}/logo?v=${encodeURIComponent(quote.logo_path)}` : null
+    },
   });
 });
 router.use(authenticate);
@@ -57,7 +67,7 @@ const upload = multer({
   limits: { fileSize: 5 * 1024 * 1024, files: 1 },
   fileFilter: (_req, file, callback) => imageTypes.has(file.mimetype)
     ? callback(null, true)
-    : callback(new ApiError(400, 'La evidencia debe ser una imagen JPG, PNG o WEBP'))
+    : callback(new ApiError(400, `${file.fieldname === 'evidencia' ? 'La evidencia' : 'El archivo'} debe ser una imagen JPG, PNG o WEBP`))
 });
 const imageUpload = upload.single('imagen');
 
@@ -104,8 +114,47 @@ const patientCode = (value) => {
 const duplicatePatientCode = (error) => String(error.message).includes('pacientes.consultorio_id, pacientes.codigo');
 const clinicJson = (row) => {
   if (!row) return row;
-  const { qr_path: qrPath, ...clinic } = row;
-  return { ...clinic, qr_url: qrPath ? '/api/consultorio/qr' : null };
+  const { qr_path: qrPath, logo_path: logoPath, fondo_path: backgroundPath, ...clinic } = row;
+  return {
+    ...clinic,
+    qr_url: qrPath ? '/api/consultorio/qr' : null,
+    logo_url: logoPath ? `/api/consultorio/identidad/logo/imagen?v=${encodeURIComponent(logoPath)}` : null,
+    fondo_url: backgroundPath ? `/api/consultorio/identidad/fondo/imagen?v=${encodeURIComponent(backgroundPath)}` : null,
+    manifest_url: clinic.slug ? `/api/publico/clinicas/${clinic.slug}/manifest.webmanifest` : '/manifest.webmanifest',
+    app_path: clinic.slug ? `/c/${clinic.slug}` : null
+  };
+};
+const brandDefaults = {
+  color_primario: '#24577a',
+  color_acento: '#6672bd',
+  color_fondo: '#f3fafc',
+  fondo_opacidad: 18
+};
+const brandAsset = (value) => {
+  const assets = {
+    logo: { column: 'logo_path', action: 'actualizar_logo' },
+    fondo: { column: 'fondo_path', action: 'actualizar_fondo' }
+  };
+  const asset = assets[value];
+  if (!asset) throw new ApiError(404, 'Tipo de imagen de marca no válido');
+  return asset;
+};
+const hexColor = (value, label) => {
+  const normalized = String(value || '').trim().toLowerCase();
+  if (!/^#[0-9a-f]{6}$/.test(normalized)) throw new ApiError(400, `${label} debe ser un color hexadecimal válido`);
+  return normalized;
+};
+const colorLuminance = (hex) => {
+  const channels = [1, 3, 5].map((start) => {
+    const channel = Number.parseInt(hex.slice(start, start + 2), 16) / 255;
+    return channel <= 0.04045 ? channel / 12.92 : ((channel + 0.055) / 1.055) ** 2.4;
+  });
+  return 0.2126 * channels[0] + 0.7152 * channels[1] + 0.0722 * channels[2];
+};
+const colorContrast = (first, second) => {
+  const light = Math.max(colorLuminance(first), colorLuminance(second));
+  const dark = Math.min(colorLuminance(first), colorLuminance(second));
+  return (light + 0.05) / (dark + 0.05);
 };
 
 router.post('/consultorio/onboarding', allowRoles('doctor'), (req, res, next) => {
@@ -114,9 +163,10 @@ router.post('/consultorio/onboarding', allowRoles('doctor'), (req, res, next) =>
     if (req.user.estado === 'pendiente') throw new ApiError(403, 'Su correo no tiene una invitación para crear un consultorio');
     required(req.body, ['nombre']);
     const result = db.transaction(() => {
-      const clinic = db.prepare(`INSERT INTO consultorios (nombre, nit, telefono, email, direccion, zona_horaria)
-        VALUES (?, ?, ?, ?, ?, ?)`).run(req.body.nombre, req.body.nit || null, req.body.telefono || null,
-        req.body.email || req.user.email, req.body.direccion || null, req.body.zona_horaria || 'America/La_Paz');
+      const clinic = db.prepare(`INSERT INTO consultorios (nombre, slug, nit, telefono, email, direccion, zona_horaria)
+        VALUES (?, ?, ?, ?, ?, ?, ?)`).run(req.body.nombre, uniqueClinicSlug(req.body.nombre), req.body.nit || null,
+        req.body.telefono || null, req.body.email || req.user.email, req.body.direccion || null,
+        req.body.zona_horaria || 'America/La_Paz');
       db.prepare(`UPDATE usuarios SET consultorio_id = ?, estado = 'activo', actualizado_en = CURRENT_TIMESTAMP WHERE id = ?`)
         .run(clinic.lastInsertRowid, req.user.id);
       audit(clinic.lastInsertRowid, req.user.id, 'crear', 'consultorio', clinic.lastInsertRowid, { nombre: req.body.nombre }, req.ip);
@@ -130,19 +180,57 @@ router.use(requireTenant);
 
 router.get('/consultorio', (req, res) => {
   const row = db.prepare(`SELECT * FROM consultorios WHERE id = ? AND eliminado_en IS NULL`).get(tenant(req));
+  if (!row) throw new ApiError(404, 'Consultorio no encontrado');
   res.json({ consultorio: clinicJson(row) });
 });
-router.patch('/consultorio', allowRoles('doctor'), (req, res) => {
+router.patch('/consultorio', allowRoles('doctor'), async (req, res) => {
   const current = db.prepare('SELECT * FROM consultorios WHERE id = ? AND eliminado_en IS NULL').get(tenant(req));
   if (!current) throw new ApiError(404, 'Consultorio no encontrado');
   if (req.body.modo_cobro !== undefined && !['app', 'definir', 'mixto'].includes(req.body.modo_cobro)) {
     throw new ApiError(400, 'Modo de cobro inválido');
   }
+  const requestedBrandName = req.body.marca_nombre === undefined ? null : String(req.body.marca_nombre || '').trim();
+  if (requestedBrandName && requestedBrandName.length > 60) {
+    throw new ApiError(400, 'El nombre de marca no puede superar 60 caracteres');
+  }
+  const brandName = req.body.marca_nombre === undefined ? current.marca_nombre : requestedBrandName || null;
+  const primary = req.body.color_primario === undefined
+    ? (current.color_primario || brandDefaults.color_primario)
+    : hexColor(req.body.color_primario, 'El color principal');
+  const accent = req.body.color_acento === undefined
+    ? (current.color_acento || brandDefaults.color_acento)
+    : hexColor(req.body.color_acento, 'El color de acento');
+  const background = req.body.color_fondo === undefined
+    ? (current.color_fondo || brandDefaults.color_fondo)
+    : hexColor(req.body.color_fondo, 'El color de fondo');
+  const backgroundOpacity = req.body.fondo_opacidad === undefined
+    ? (current.fondo_opacidad ?? brandDefaults.fondo_opacidad)
+    : Number(req.body.fondo_opacidad);
+  if (!Number.isInteger(backgroundOpacity) || backgroundOpacity < 0 || backgroundOpacity > 45) {
+    throw new ApiError(400, 'La intensidad del fondo debe estar entre 0 y 45');
+  }
+  if (colorContrast(primary, '#ffffff') < 4.5) {
+    throw new ApiError(400, 'El color principal debe ser más oscuro para mantener legible la aplicación');
+  }
+  if (colorContrast(accent, '#ffffff') < 3) {
+    throw new ApiError(400, 'El color de acento debe ser más oscuro para mantener visibles los detalles');
+  }
+  if (colorContrast(background, '#17354a') < 4.5) {
+    throw new ApiError(400, 'El color de fondo debe ser claro para mantener legible la aplicación');
+  }
+  const primaryChanged = primary !== current.color_primario;
   const fields = ['nombre', 'nit', 'telefono', 'email', 'direccion', 'zona_horaria', 'modo_cobro'];
   const values = fields.map((field) => req.body[field] ?? current[field]);
-  db.prepare(`UPDATE consultorios SET nombre=?, nit=?, telefono=?, email=?, direccion=?, zona_horaria=?, modo_cobro=?, actualizado_en=CURRENT_TIMESTAMP WHERE id=?`)
-    .run(...values, tenant(req));
-  log(req, 'actualizar', 'consultorio', tenant(req), req.body);
+  if (primaryChanged) {
+    try { await createClinicIcons({ ...current, color_primario: primary }); }
+    catch { throw new ApiError(400, 'No se pudo actualizar el color con el logo actual'); }
+  }
+  db.transaction(() => {
+    db.prepare(`UPDATE consultorios SET nombre=?, nit=?, telefono=?, email=?, direccion=?, zona_horaria=?, modo_cobro=?,
+        marca_nombre=?, color_primario=?, color_acento=?, color_fondo=?, fondo_opacidad=?, actualizado_en=CURRENT_TIMESTAMP WHERE id=?`)
+      .run(...values, brandName, primary, accent, background, backgroundOpacity, tenant(req));
+    log(req, 'actualizar', 'consultorio', tenant(req), req.body);
+  })();
   const updated = db.prepare('SELECT * FROM consultorios WHERE id=?').get(tenant(req));
   res.json({ mensaje: 'Consultorio actualizado correctamente', consultorio: clinicJson(updated) });
 });
@@ -167,6 +255,58 @@ router.get('/consultorio/qr', (req, res) => {
   const clinic = db.prepare('SELECT qr_path FROM consultorios WHERE id=? AND eliminado_en IS NULL').get(tenant(req));
   if (!clinic?.qr_path) throw new ApiError(404, 'El consultorio no ha cargado un QR');
   res.sendFile(path.join(config.uploadDir, path.basename(clinic.qr_path)));
+});
+router.post('/consultorio/identidad/:tipo', allowRoles('doctor'), (req, res, next) => {
+  let asset;
+  try { asset = brandAsset(req.params.tipo); } catch (error) { return next(error); }
+  imageUpload(req, res, async (error) => {
+    if (error) return next(error);
+    try {
+      if (!req.file) throw new ApiError(400, 'Debe seleccionar una imagen');
+      if (!hasValidImageSignature(req.file)) throw new ApiError(400, 'El archivo no contiene una imagen válida');
+      try { await validateClinicImage(req.file.path); }
+      catch { throw new ApiError(400, 'El archivo no contiene una imagen válida'); }
+      if (req.params.tipo === 'logo') {
+        const pending = db.prepare('SELECT * FROM consultorios WHERE id=? AND eliminado_en IS NULL').get(tenant(req));
+        if (!pending) throw new ApiError(404, 'Consultorio no encontrado');
+        await createClinicIcons({ ...pending, logo_path: req.file.filename });
+      }
+      const current = db.prepare(`SELECT *, ${asset.column} AS path FROM consultorios WHERE id=?`).get(tenant(req));
+      const updatedAsset = db.prepare(`UPDATE consultorios SET ${asset.column}=?, actualizado_en=CURRENT_TIMESTAMP
+        WHERE id=? AND eliminado_en IS NULL`).run(req.file.filename, tenant(req));
+      ensureFound(updatedAsset, 'Consultorio no encontrado');
+      const updated = db.prepare('SELECT * FROM consultorios WHERE id=?').get(tenant(req));
+      if (current?.path) fs.unlink(path.join(config.uploadDir, path.basename(current.path)), () => {});
+      log(req, asset.action, 'consultorio', tenant(req));
+      res.json({ mensaje: 'Identidad visual actualizada', consultorio: clinicJson(updated) });
+    } catch (caught) {
+      if (req.file) fs.unlink(req.file.path, () => {});
+      next(caught);
+    }
+  });
+});
+router.delete('/consultorio/identidad/:tipo', allowRoles('doctor'), (req, res) => {
+  const asset = brandAsset(req.params.tipo);
+  const current = db.prepare(`SELECT ${asset.column} AS path FROM consultorios WHERE id=?`).get(tenant(req));
+  const deleted = db.prepare(`UPDATE consultorios SET ${asset.column}=NULL, actualizado_en=CURRENT_TIMESTAMP
+    WHERE id=? AND eliminado_en IS NULL`).run(tenant(req));
+  ensureFound(deleted, 'Consultorio no encontrado');
+  if (current?.path) fs.unlink(path.join(config.uploadDir, path.basename(current.path)), () => {});
+  log(req, `eliminar_${req.params.tipo}`, 'consultorio', tenant(req));
+  const updated = db.prepare('SELECT * FROM consultorios WHERE id=?').get(tenant(req));
+  if (req.params.tipo === 'logo') removeClinicIcons(updated.slug);
+  res.json({ mensaje: 'Imagen eliminada', consultorio: clinicJson(updated) });
+});
+router.get('/consultorio/identidad/:tipo/imagen', (req, res, next) => {
+  const asset = brandAsset(req.params.tipo);
+  const clinic = db.prepare(`SELECT ${asset.column} AS path FROM consultorios WHERE id=? AND eliminado_en IS NULL`).get(tenant(req));
+  if (!clinic?.path) throw new ApiError(404, 'El consultorio no ha cargado esta imagen');
+  const requestedVersion = String(req.query.v || '');
+  if (requestedVersion && requestedVersion !== clinic.path) throw new ApiError(404, 'La imagen ya no está disponible');
+  res.setHeader('Cache-Control', requestedVersion ? 'private, max-age=31536000, immutable' : 'private, max-age=300');
+  res.sendFile(path.join(config.uploadDir, path.basename(clinic.path)), (error) => {
+    if (error) { res.removeHeader('Cache-Control'); next(new ApiError(404, 'La imagen ya no está disponible')); }
+  });
 });
 
 router.get('/usuarios', allowRoles('doctor'), (req, res) => {

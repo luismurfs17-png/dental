@@ -25,6 +25,7 @@ import { emailUrl, whatsappUrl } from "../../lib/contact.js";
 
 export function Agenda() {
   const { user } = useAuth();
+  const clinicName = user?.consultorio?.marca_nombre || user?.consultorio?.nombre || '';
   const [viewMode, setViewMode] = useState('week');
   const [week, setWeek] = useState(() => mondayOf(new Date()));
   const days = Array.from({ length: viewMode === 'week' ? 7 : viewMode === 'biweek' ? 14 : 28 }, (_, index) => addDays(week, index));
@@ -354,7 +355,7 @@ export function Agenda() {
               {selected.telefono && (
                 <a
                   className="button button-ghost button-small"
-                  href={whatsappUrl(selected.telefono, selected.nombres)}
+                  href={whatsappUrl(selected.telefono, selected.nombres, clinicName)}
                   target="_blank"
                   rel="noreferrer"
                 >
@@ -364,7 +365,7 @@ export function Agenda() {
               {selected.email && (
                 <a
                   className="button button-ghost button-small"
-                  href={emailUrl(selected.email, selected.nombres)}
+                  href={emailUrl(selected.email, selected.nombres, clinicName)}
                 >
                   <Icon name="email" /> Email
                 </a>
@@ -558,6 +559,7 @@ export function Agenda() {
 
 export function Patients() {
   const { user } = useAuth();
+  const clinicName = user?.consultorio?.marca_nombre || user?.consultorio?.nombre || '';
   const [search, setSearch] = useState("");
   const [filter, setFilter] = useState("todos");
   const { data, loading, error, reload } = useRemote(
@@ -706,7 +708,7 @@ export function Patients() {
                   <div className="row-actions">
                     {patient.telefono && (
                       <a
-                        href={whatsappUrl(patient.telefono, patient.nombres)}
+                        href={whatsappUrl(patient.telefono, patient.nombres, clinicName)}
                         target="_blank"
                         rel="noreferrer"
                         aria-label={`WhatsApp a ${name}`}
@@ -717,7 +719,7 @@ export function Patients() {
                     )}
                     {patient.email && (
                       <a
-                        href={emailUrl(patient.email, patient.nombres)}
+                        href={emailUrl(patient.email, patient.nombres, clinicName)}
                         aria-label={`Email a ${name}`}
                         title="Enviar email"
                       >

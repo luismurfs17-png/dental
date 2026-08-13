@@ -1,0 +1,17 @@
+{
+  "id": "/",
+  "name": "Portal Clínico",
+  "short_name": "Clínicas",
+  "description": "Acceso seguro para clínicas, equipos y pacientes",
+  "lang": "es",
+  "start_url": "/login?origen=app",
+  "scope": "/login",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#f3fafc",
+  "theme_color": "#24577a",
+  "icons": [
+    { "src": "/icons/clinicas-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "/icons/clinicas-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any maskable" }
+  ]
+}

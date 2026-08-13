@@ -6,10 +6,12 @@ import { config } from './config.js';
 fs.mkdirSync(config.dataDir, { recursive: true });
 fs.mkdirSync(config.uploadDir, { recursive: true });
 
+const databaseExisted = fs.existsSync(config.dbFile);
 export const db = new Database(config.dbFile);
 db.pragma('journal_mode = WAL');
 db.pragma('foreign_keys = ON');
 db.pragma('busy_timeout = 5000');
+if (databaseExisted) await backupBeforeTenantBrandingMigration();
 db.exec(fs.readFileSync(path.join(import.meta.dirname, 'schema.sql'), 'utf8'));
 
 function ensureColumn(table, column, definition) {
@@ -17,8 +19,37 @@ function ensureColumn(table, column, definition) {
   if (!columns.some((item) => item.name === column)) db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
 }
 
+async function backupBeforeTenantBrandingMigration() {
+  const table = db.prepare(`SELECT 1 FROM sqlite_master WHERE type='table' AND name='consultorios'`).get();
+  if (!table) return;
+  const columns = db.prepare('PRAGMA table_info(consultorios)').all();
+  const names = new Set(columns.map((item) => item.name));
+  const required = ['slug', 'marca_nombre', 'color_primario', 'color_acento', 'color_fondo', 'fondo_opacidad', 'logo_path', 'fondo_path'];
+  if (required.every((column) => names.has(column))) return;
+  let hasExistingData = db.prepare('SELECT EXISTS(SELECT 1 FROM consultorios LIMIT 1) existing').get().existing;
+  const usersTable = db.prepare(`SELECT 1 FROM sqlite_master WHERE type='table' AND name='usuarios'`).get();
+  if (!hasExistingData && usersTable) {
+    hasExistingData = db.prepare('SELECT EXISTS(SELECT 1 FROM usuarios LIMIT 1) existing').get().existing;
+  }
+  if (!hasExistingData) return;
+  const stamp = new Date().toISOString().replace(/\.\d{3}Z$/, 'Z').replace(/[:.]/g, '-');
+  const snapshotDir = path.join(config.dataDir, 'backups', `pre-pwa-multiclinica-${stamp}`);
+  fs.mkdirSync(snapshotDir, { recursive: true });
+  await db.backup(path.join(snapshotDir, 'dentista.sqlite'));
+  if (fs.existsSync(config.uploadDir)) fs.cpSync(config.uploadDir, path.join(snapshotDir, 'uploads'), { recursive: true });
+  console.log(`Snapshot previo a migración creado: ${snapshotDir}`);
+}
+
 ensureColumn('consultorios', 'qr_path', 'TEXT');
 ensureColumn('consultorios', 'modo_cobro', "TEXT NOT NULL DEFAULT 'mixto' CHECK (modo_cobro IN ('app','definir','mixto'))");
+ensureColumn('consultorios', 'slug', 'TEXT');
+ensureColumn('consultorios', 'marca_nombre', 'TEXT');
+ensureColumn('consultorios', 'color_primario', "TEXT NOT NULL DEFAULT '#24577a'");
+ensureColumn('consultorios', 'color_acento', "TEXT NOT NULL DEFAULT '#6672bd'");
+ensureColumn('consultorios', 'color_fondo', "TEXT NOT NULL DEFAULT '#f3fafc'");
+ensureColumn('consultorios', 'fondo_opacidad', 'INTEGER NOT NULL DEFAULT 18 CHECK (fondo_opacidad BETWEEN 0 AND 45)');
+ensureColumn('consultorios', 'logo_path', 'TEXT');
+ensureColumn('consultorios', 'fondo_path', 'TEXT');
 ensureColumn('presupuestos', 'token_publico', 'TEXT');
 ensureColumn('presupuestos', 'compartido_en', 'TEXT');
 ensureColumn('presupuestos', 'visto_en', 'TEXT');
@@ -32,6 +63,9 @@ ensureColumn('registros_clinicos', 'validado_por', 'INTEGER REFERENCES usuarios(
 ensureColumn('registros_clinicos', 'validado_en', 'TEXT');
 ensureColumn('auditoria', 'paciente_id', 'INTEGER REFERENCES pacientes(id)');
 ensureColumn('pagos', 'presupuesto_id', 'INTEGER REFERENCES presupuestos(id)');
+db.exec('DROP INDEX IF EXISTS uq_consultorios_slug');
+backfillClinicSlugs();
+db.exec('CREATE UNIQUE INDEX IF NOT EXISTS uq_consultorios_slug ON consultorios(slug COLLATE NOCASE) WHERE slug IS NOT NULL');
 db.exec('CREATE INDEX IF NOT EXISTS idx_auditoria_paciente ON auditoria(consultorio_id, paciente_id, creado_en)');
 db.exec('CREATE INDEX IF NOT EXISTS idx_pagos_presupuesto ON pagos(consultorio_id, presupuesto_id, estado, eliminado_en)');
 
@@ -61,6 +95,42 @@ function makeColumnNullable(table, column, type) {
   } finally {
     db.pragma('foreign_keys = ON');
   }
+}
+
+function normalizeClinicSlug(value) {
+  return String(value || '')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 48)
+    .replace(/-+$/g, '');
+}
+
+function backfillClinicSlugs() {
+  const clinics = db.prepare('SELECT id, nombre, slug FROM consultorios ORDER BY id').all();
+  const used = new Set();
+  const update = db.prepare('UPDATE consultorios SET slug=? WHERE id=?');
+  db.transaction(() => {
+    for (const clinic of clinics) {
+      const base = normalizeClinicSlug(clinic.slug || clinic.nombre) || `clinica-${clinic.id}`;
+      let slug = base;
+      let suffix = 2;
+      while (used.has(slug)) slug = `${base.slice(0, 43)}-${suffix++}`;
+      used.add(slug);
+      if (clinic.slug !== slug) update.run(slug, clinic.id);
+    }
+  })();
+}
+
+export function uniqueClinicSlug(name) {
+  const base = normalizeClinicSlug(name) || 'clinica';
+  let slug = base;
+  let suffix = 2;
+  const exists = db.prepare('SELECT 1 FROM consultorios WHERE slug=? COLLATE NOCASE');
+  while (exists.get(slug)) slug = `${base.slice(0, 43)}-${suffix++}`;
+  return slug;
 }
 
 export function audit(consultorioId, usuarioId, accion, entidadTipo, entidadId, datos, ip, pacienteId) {

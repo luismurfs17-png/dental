@@ -17,7 +17,7 @@ import PatientDetail from './pages/team/PatientDetail.jsx'
 import Settings from './pages/team/Settings.jsx'
 import Audit from './pages/team/Audit.jsx'
 
-export default function App() {
+export default function App({ clinicSlug = '' }) {
   const [user, setUser] = useState(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
@@ -42,18 +42,21 @@ export default function App() {
     <AuthContext.Provider value={{ user, setUser, loadSession }}>
       {loading ? (
         <div className="boot-screen">
-          <div className="brand boot-brand"><span className="brand-mark"><Icon name="tooth" size={23} /></span><span>SONRIDENT</span></div>
+          <div className="brand boot-brand"><span className="brand-mark"><Icon name="tooth" size={23} /></span><span>PORTAL CLÍNICO</span></div>
           <Loading label="Abriendo tu espacio" />
         </div>
       ) : error && !user ? (
         <div className="boot-screen"><ErrorState message={error} onRetry={loadSession} /></div>
       ) : (
         <Routes>
-          <Route path="/login" element={<Login />} />
+          {clinicSlug ? <>
+            <Route path="/" element={<Login branded clinicSlug={clinicSlug} />} />
+            <Route path="/instalar" element={<Login branded installOnly clinicSlug={clinicSlug} />} />
+          </> : <Route path="/login" element={<Login />} />}
           <Route path="/auth/success" element={<AuthSuccess />} />
-          <Route path="/cotizacion/:token" element={<QuotePublic />} />
-          <Route path="/crear-consultorio" element={<RequireAuth><Onboarding /></RequireAuth>} />
-          <Route element={<RequireAuth><AppShell /></RequireAuth>}>
+          {!clinicSlug && <Route path="/cotizacion/:token" element={<QuotePublic />} />}
+          {!clinicSlug && <Route path="/crear-consultorio" element={<RequireAuth><Onboarding /></RequireAuth>} />}
+          <Route element={<RequireAuth clinicSlug={clinicSlug}><AppShell /></RequireAuth>}>
             <Route path="/inicio" element={<RoleRoute allow={['paciente']}><PatientDashboard /></RoleRoute>} />
             <Route path="/reservar" element={<RoleRoute allow={['paciente']}><BookAppointment /></RoleRoute>} />
             <Route path="/citas" element={<RoleRoute allow={['paciente']}><PatientAppointments /></RoleRoute>} />
@@ -68,19 +71,24 @@ export default function App() {
             <Route path="/notificaciones" element={<RoleRoute allow={['doctor', 'operativo']}><Notifications /></RoleRoute>} />
             <Route path="/configuracion" element={<RoleRoute allow={['doctor']}><Settings /></RoleRoute>} />
             <Route path="/auditoria" element={<RoleRoute allow={['doctor']}><Audit /></RoleRoute>} />
-            <Route path="/admin" element={<AdminRoute><AdminPanel /></AdminRoute>} />
+            {!clinicSlug && <Route path="/admin" element={<AdminRoute><AdminPanel /></AdminRoute>} />}
           </Route>
-          <Route path="*" element={<Navigate to={user ? homeFor(user) : '/login'} replace />} />
+          <Route path="*" element={<Navigate to={user ? homeFor(user) : clinicSlug ? '/' : '/login'} replace />} />
         </Routes>
       )}
     </AuthContext.Provider>
   )
 }
 
-function RequireAuth({ children }) {
+function RequireAuth({ children, clinicSlug = '' }) {
   const location = useLocation()
   const { user } = useContext(AuthContext)
-  if (!user) return <Navigate to="/login" state={{ from: location }} replace />
+  if (!user) {
+    const slug = sessionStorage.getItem('clinic_portal_slug')
+    if (clinicSlug) return <Navigate to="/" state={{ from: location }} replace />
+    return <Navigate to={slug ? `/c/${slug}` : '/login'} state={{ from: location }} replace />
+  }
+  if (clinicSlug && user.consultorio_slug !== clinicSlug) return <Navigate to="/" state={{ from: location }} replace />
   return children
 }
 

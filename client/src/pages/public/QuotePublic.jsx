@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { useParams } from 'react-router-dom'
 import { api, formatDate, formatMoney } from '../../lib/api.js'
+import { clinicBrand, clinicTheme } from '../../lib/branding.js'
 import Icon from '../../components/Icon.jsx'
 import { ErrorState, Loading, StatusPill } from '../../components/UI.jsx'
 
@@ -30,9 +31,9 @@ export default function QuotePublic() {
   }, [token])
 
   return (
-    <div className="quote-public-page">
+    <div className="quote-public-page" style={clinicTheme(data?.consultorio)}>
       <header className="quote-public-head">
-        <div className="brand-public"><span className="brand-mark"><Icon name="tooth" size={22} /></span><span>SONRIDENT</span></div>
+        <div className="brand-public"><span className={`brand-mark ${data?.consultorio?.logo_url ? 'has-logo' : ''}`}>{data?.consultorio?.logo_url ? <img src={data.consultorio.logo_url} alt="" /> : <Icon name="tooth" size={22} />}</span><span>{clinicBrand(data?.consultorio).name}</span></div>
         <h1>Cotización de tratamiento</h1>
       </header>
       <main className="quote-public-card">

@@ -72,8 +72,10 @@ export function authenticate(req, _res, next) {
     } catch {
       throw new ApiError(401, 'La sesión no es válida o expiró');
     }
-    const user = db.prepare(`SELECT id, consultorio_id, email, nombre, avatar_url, rol, estado
-      FROM usuarios WHERE id = ? AND eliminado_en IS NULL`).get(Number(payload.sub));
+    const user = db.prepare(`SELECT u.id, u.consultorio_id, u.email, u.nombre, u.avatar_url, u.rol, u.estado,
+        c.slug consultorio_slug
+      FROM usuarios u LEFT JOIN consultorios c ON c.id=u.consultorio_id AND c.eliminado_en IS NULL
+      WHERE u.id = ? AND u.eliminado_en IS NULL AND (u.consultorio_id IS NULL OR c.id IS NOT NULL)`).get(Number(payload.sub));
     if (!user) throw new ApiError(401, 'La sesión no es válida');
     if (!['activo', 'pendiente'].includes(user.estado)) {
       throw new ApiError(401, 'La cuenta no está activa. Contacte al administrador.');

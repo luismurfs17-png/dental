@@ -3,6 +3,7 @@ PRAGMA foreign_keys = ON;
 CREATE TABLE IF NOT EXISTS consultorios (
   id INTEGER PRIMARY KEY,
   nombre TEXT NOT NULL,
+  slug TEXT,
   nit TEXT,
   telefono TEXT,
   email TEXT,
@@ -11,6 +12,13 @@ CREATE TABLE IF NOT EXISTS consultorios (
   moneda TEXT NOT NULL DEFAULT 'Bs',
   modo_cobro TEXT NOT NULL DEFAULT 'mixto' CHECK (modo_cobro IN ('app','definir','mixto')),
   qr_path TEXT,
+  marca_nombre TEXT,
+  color_primario TEXT NOT NULL DEFAULT '#24577a',
+  color_acento TEXT NOT NULL DEFAULT '#6672bd',
+  color_fondo TEXT NOT NULL DEFAULT '#f3fafc',
+  fondo_opacidad INTEGER NOT NULL DEFAULT 18 CHECK (fondo_opacidad BETWEEN 0 AND 45),
+  logo_path TEXT,
+  fondo_path TEXT,
   creado_en TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
   actualizado_en TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
   eliminado_en TEXT

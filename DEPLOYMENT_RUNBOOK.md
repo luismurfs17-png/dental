@@ -11,6 +11,7 @@ project_name: sonrident
 repository: luismurfs17-png/dental
 production_branch: main
 production_url: https://sonrident.copaapp.cloud
+planned_neutral_url: https://clinicas.copaapp.cloud
 health_path: /api/health
 deployment_platform: Dokploy
 ```
@@ -73,6 +74,27 @@ Crear un cliente OAuth de tipo aplicación web. Registrar exactamente:
 
 - Origen autorizado: `https://DOMINIO`.
 - URI de redirección: `https://DOMINIO/api/auth/google/callback`.
+
+Al migrar al portal neutral usar `https://clinicas.copaapp.cloud` como origen y
+`https://clinicas.copaapp.cloud/api/auth/google/callback` como URI. El cambio de
+`CLIENT_URL`, callback, DNS y dominio Dokploy debe hacerse en una misma ventana:
+las cookies y las instalaciones PWA no se transfieren entre dominios. El dominio
+anterior puede mostrar un aviso o redirección, pero los usuarios deberán iniciar
+sesión e instalar nuevamente desde el dominio neutral.
+
+## PWA multi-clínica
+
+- Portal neutral: `/login`.
+- Portal e instalación por clínica: `/c/:slug` y `/c/:slug/instalar`.
+- Cada clínica obtiene manifiesto e iconos PNG propios; el `id` PWA usa su slug.
+- Los enlaces y QR usan `window.location.origin`, por lo que adoptan el nuevo
+  dominio automáticamente después de cambiar DNS y Dokploy.
+- No se guarda información clínica sin conexión. El service worker solo conserva
+  recursos visuales y muestra una pantalla segura cuando no hay red.
+- Las instalaciones comparten sesión por estar en el mismo dominio. El login
+  marcado valida la membresía y no permite entrar silenciosamente a otra clínica.
+- El primer arranque que detecta el esquema anterior crea automáticamente un
+  snapshot `pre-pwa-multiclinica-*` antes de añadir slug e identidad visual.
 
 El doctor que no existe todavía entra con Google y completa el alta de su
 consultorio. Los pacientes y operativos deben estar preautorizados por correo
@@ -207,6 +229,7 @@ repository: luismurfs17-png/dental
 branch: main
 build_type: Dockerfile
 domain: sonrident.copaapp.cloud
+next_domain: clinicas.copaapp.cloud
 container_port: 3000
 volume_name: sonrident_data
 volume_mount_path: /app/data

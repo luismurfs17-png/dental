@@ -23,7 +23,7 @@ export const config = {
     secure: process.env.SMTP_SECURE === 'true',
     user: process.env.SMTP_USER || '',
     pass: process.env.SMTP_PASS || '',
-    from: process.env.SMTP_FROM || 'SONRIDENT <no-reply@example.com>',
+    from: process.env.SMTP_FROM || 'Portal Clínico <no-reply@example.com>',
     cron: process.env.REMINDER_CRON || '0 * * * *',
     hours: Number(process.env.REMINDER_HOURS || 24)
   },

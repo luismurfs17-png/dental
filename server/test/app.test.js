@@ -5,7 +5,7 @@ import path from 'node:path';
 import request from 'supertest';
 import jwt from 'jsonwebtoken';
 import { app } from '../src/app.js';
-import { db } from '../src/db.js';
+import { db, uniqueClinicSlug } from '../src/db.js';
 import { config } from '../src/config.js';
 
 process.env.SUPERADMIN_EMAILS = 'admin@test.local';
@@ -16,9 +16,13 @@ let auditedPatient;
 before(() => {
   const setup = db.transaction(() => {
     const ensureClinic = (nombre, email) => {
-      let clinic = db.prepare(`SELECT id FROM consultorios WHERE email=? AND eliminado_en IS NULL`).get(email);
+      let clinic = db.prepare(`SELECT id, slug FROM consultorios WHERE email=? AND eliminado_en IS NULL`).get(email);
       if (!clinic) {
-        clinic = { id: Number(db.prepare(`INSERT INTO consultorios (nombre,email) VALUES (?,?)`).run(nombre, email).lastInsertRowid) };
+        const slug = uniqueClinicSlug(nombre);
+        clinic = { id: Number(db.prepare(`INSERT INTO consultorios (nombre,email,slug) VALUES (?,?,?)`).run(nombre, email, slug).lastInsertRowid), slug };
+      } else if (!clinic.slug) {
+        clinic.slug = uniqueClinicSlug(nombre);
+        db.prepare('UPDATE consultorios SET slug=? WHERE id=?').run(clinic.slug, clinic.id);
       }
       return clinic;
     };
@@ -63,7 +67,7 @@ before(() => {
     const weekday = new Date(`${date}T12:00:00Z`).getUTCDay();
     db.prepare(`INSERT OR IGNORE INTO horarios (consultorio_id,usuario_id,dia_semana,hora_inicio,hora_fin) VALUES (?,?,?,'09:00','10:00')`).run(clinic.id, doctor.id, weekday);
     db.prepare(`DELETE FROM citas WHERE consultorio_id=? AND paciente_id=? AND motivo='INTEGRATION-BOOKING'`).run(clinic.id, patient.id);
-    return { clinicId: clinic.id, doctorId: doctor.id, operativeId: operative.id, operative2Id: operative2.id, adminId: admin.id,
+    return { clinicId: clinic.id, clinicSlug: clinic.slug, doctorId: doctor.id, operativeId: operative.id, operative2Id: operative2.id, adminId: admin.id,
       patientId: patient.id, serviceId: service.id, foreignClinicId: foreignClinic.id, foreignDoctorId: foreignDoctor.id,
       foreignPatientId: foreignPatient.id, foreignServiceId: foreignService.id, date };
   });
@@ -93,7 +97,7 @@ test('login de desarrollo y listado de pacientes quedan limitados al consultorio
 test('paciente reporta QR y solo el doctor del consultorio lo valida', async () => {
   const patientAgent = request.agent(app);
   await patientAgent.post('/api/auth/desarrollo').send({ email: 'integration-patient@test.local' }).expect(200);
-  const image = Buffer.from([0x89,0x50,0x4e,0x47,0x0d,0x0a,0x1a,0x0a,0,0,0,0]);
+  const image = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAYAAABytg0kAAAACXBIWXMAAAPoAAAD6AG1e1JrAAAADklEQVQImWP4DwUMMAYAj4IP8cvlVgcAAAAASUVORK5CYII=', 'base64');
   const created = await patientAgent.post('/api/pagos')
     .field('paciente_id', String(fixture.patientId)).field('monto_bs', '75').field('metodo', 'qr')
     .attach('evidencia', image, { filename: 'evidencia.png', contentType: 'image/png' }).expect(201);
@@ -454,6 +458,127 @@ test('el doctor puede eliminar y recrear el mismo horario sin conflicto', async 
   assert.equal(rows.total, 1);
 });
 
+test('identidad visual: solo doctores editan y los archivos no cruzan consultorios', async (t) => {
+  const stamp = `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+  const temporary = db.transaction(() => {
+    const clinicSlug = uniqueClinicSlug(`Clínica Marca ${stamp}`);
+    const foreignSlug = uniqueClinicSlug(`Clínica Marca Externa ${stamp}`);
+    const clinic = db.prepare(`INSERT INTO consultorios (nombre,email,slug) VALUES (?,?,?)`)
+      .run('Clínica Marca', `marca-${stamp}@test.local`, clinicSlug).lastInsertRowid;
+    const foreignClinic = db.prepare(`INSERT INTO consultorios (nombre,email,slug) VALUES (?,?,?)`)
+      .run('Clínica Marca Externa', `marca-externa-${stamp}@test.local`, foreignSlug).lastInsertRowid;
+    const doctor = db.prepare(`INSERT INTO usuarios (consultorio_id,email,nombre,rol,estado) VALUES (?,?,?,'doctor','activo')`)
+      .run(clinic, `doctor-marca-${stamp}@test.local`, 'Doctor Marca').lastInsertRowid;
+    const operative = db.prepare(`INSERT INTO usuarios (consultorio_id,email,nombre,rol,estado) VALUES (?,?,?,'operativo','activo')`)
+      .run(clinic, `operativo-marca-${stamp}@test.local`, 'Operativo Marca').lastInsertRowid;
+    const foreignDoctor = db.prepare(`INSERT INTO usuarios (consultorio_id,email,nombre,rol,estado) VALUES (?,?,?,'doctor','activo')`)
+      .run(foreignClinic, `doctor-externo-${stamp}@test.local`, 'Doctor Externo').lastInsertRowid;
+    return { clinic: Number(clinic), clinicSlug, foreignClinic: Number(foreignClinic), foreignSlug, doctor: Number(doctor), operative: Number(operative), foreignDoctor: Number(foreignDoctor) };
+  })();
+  t.after(async () => {
+    const assets = db.prepare(`SELECT slug, logo_path, fondo_path FROM consultorios WHERE id IN (?,?)`)
+      .all(temporary.clinic, temporary.foreignClinic);
+    for (const asset of assets) {
+      for (const file of [asset.logo_path, asset.fondo_path]) {
+        if (file) fs.rmSync(path.join(config.uploadDir, path.basename(file)), { force: true });
+      }
+      for (const size of [180, 192, 512]) {
+        const icon = path.join(config.uploadDir, `brand-${asset.slug}-${size}.png`);
+        for (let attempt = 0; attempt < 5; attempt++) {
+          try { fs.rmSync(icon, { force: true, maxRetries: 3, retryDelay: 25 }); break; }
+          catch (error) {
+            if (attempt === 4) throw error;
+            await new Promise((resolve) => setTimeout(resolve, 30));
+          }
+        }
+      }
+    }
+    db.transaction(() => {
+      db.prepare(`DELETE FROM admin_auditoria WHERE entidad_tipo='consultorio' AND entidad_id IN (?,?)`)
+        .run(temporary.clinic, temporary.foreignClinic);
+      db.prepare(`DELETE FROM auditoria WHERE consultorio_id IN (?,?)`).run(temporary.clinic, temporary.foreignClinic);
+      db.prepare(`DELETE FROM usuarios WHERE id IN (?,?,?)`).run(temporary.doctor, temporary.operative, temporary.foreignDoctor);
+      db.prepare(`DELETE FROM consultorios WHERE id IN (?,?)`).run(temporary.clinic, temporary.foreignClinic);
+    })();
+  });
+
+  const doctor = request.agent(app);
+  const operative = request.agent(app);
+  const foreignDoctor = request.agent(app);
+  await doctor.post('/api/auth/desarrollo').send({ email: `doctor-marca-${stamp}@test.local` }).expect(200);
+  await operative.post('/api/auth/desarrollo').send({ email: `operativo-marca-${stamp}@test.local` }).expect(200);
+  await foreignDoctor.post('/api/auth/desarrollo').send({ email: `doctor-externo-${stamp}@test.local` }).expect(200);
+
+  const updated = await doctor.patch('/api/consultorio').send({
+    marca_nombre: 'Sonrisa Norte', color_primario: '#173f5f', color_acento: '#d05a43',
+    color_fondo: '#f7f4ed', fondo_opacidad: 24
+  }).expect(200);
+  assert.equal(updated.body.consultorio.marca_nombre, 'Sonrisa Norte');
+  assert.equal(updated.body.consultorio.color_primario, '#173f5f');
+  assert.equal(updated.body.consultorio.fondo_opacidad, 24);
+  assert.equal('logo_path' in updated.body.consultorio, false);
+  assert.equal('fondo_path' in updated.body.consultorio, false);
+  await doctor.patch('/api/consultorio').send({ color_primario: '#fff' }).expect(400);
+  await doctor.patch('/api/consultorio').send({ color_primario: '#eeeeee' }).expect(400);
+  await doctor.patch('/api/consultorio').send({ color_acento: '#ffff00' }).expect(400);
+  await doctor.patch('/api/consultorio').send({ marca_nombre: 'M'.repeat(61) }).expect(400);
+  await doctor.patch('/api/consultorio').send({ fondo_opacidad: 60 }).expect(400);
+  await operative.patch('/api/consultorio').send({ marca_nombre: 'Sin permiso' }).expect(403);
+  await operative.post('/api/consultorio/identidad/logo').expect(403);
+  await doctor.post('/api/consultorio/identidad/logo')
+    .attach('imagen', Buffer.from([0x89,0x50,0x4e,0x47,0x0d,0x0a,0x1a,0x0a,0,0,0,0]),
+      { filename: 'logo-corrupto.png', contentType: 'image/png' }).expect(400);
+  assert.equal(db.prepare('SELECT logo_path FROM consultorios WHERE id=?').get(temporary.clinic).logo_path, null);
+
+  const image = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAYAAABytg0kAAAACXBIWXMAAAPoAAAD6AG1e1JrAAAADklEQVQImWP4DwUMMAYAj4IP8cvlVgcAAAAASUVORK5CYII=', 'base64');
+  const logo = await doctor.post('/api/consultorio/identidad/logo')
+    .attach('imagen', image, { filename: 'logo.png', contentType: 'image/png' }).expect(200);
+  const background = await doctor.post('/api/consultorio/identidad/fondo')
+    .attach('imagen', image, { filename: 'fondo.png', contentType: 'image/png' }).expect(200);
+  assert.match(logo.body.consultorio.logo_url, /^\/api\/consultorio\/identidad\/logo\/imagen\?v=/);
+  assert.match(background.body.consultorio.fondo_url, /^\/api\/consultorio\/identidad\/fondo\/imagen\?v=/);
+  assert.equal(logo.body.consultorio.app_path, `/c/${temporary.clinicSlug}`);
+
+  const publicClinic = await request(app).get(`/api/publico/clinicas/${temporary.clinicSlug}`).expect(200);
+  assert.equal(publicClinic.body.consultorio.marca_nombre, 'Sonrisa Norte');
+  assert.equal(publicClinic.body.consultorio.app_path, `/c/${temporary.clinicSlug}`);
+  assert.match(publicClinic.body.consultorio.logo_url, new RegExp(`/api/publico/clinicas/${temporary.clinicSlug}/logo`));
+  assert.equal('email' in publicClinic.body.consultorio, false);
+  const manifest = await request(app).get(`/api/publico/clinicas/${temporary.clinicSlug}/manifest.webmanifest`).expect(200);
+  assert.match(manifest.headers['content-type'], /application\/manifest\+json/);
+  assert.equal(manifest.body.id, `/c/${temporary.clinicSlug}/`);
+  assert.equal(manifest.body.name, 'Sonrisa Norte');
+  assert.equal(manifest.body.start_url, `/c/${temporary.clinicSlug}/?origen=app`);
+  assert.equal(manifest.body.scope, `/c/${temporary.clinicSlug}/`);
+  assert.ok(manifest.body.icons.some((icon) => icon.sizes === '512x512' && icon.purpose.includes('maskable')));
+  await request(app).get(`/api/publico/clinicas/${temporary.clinicSlug}/icon/180.png`).expect(200).expect('Content-Type', /image\/png/);
+  await request(app).get(`/api/publico/clinicas/${temporary.clinicSlug}/icon/192.png`).expect(200).expect('Content-Type', /image\/png/);
+  await request(app).get(`/api/publico/clinicas/${temporary.clinicSlug}/icon/512.png`).expect(200).expect('Content-Type', /image\/png/);
+  await request(app).get(`/api/publico/clinicas/${temporary.clinicSlug}/logo`).expect(200).expect('Content-Type', /image\/png/);
+  await request(app).get('/api/publico/clinicas/no-existe').expect(404);
+
+  await doctor.patch('/api/consultorio').send({ nombre: 'Clínica Renombrada' }).expect(200);
+  const stableSlug = await doctor.get('/api/consultorio').expect(200);
+  assert.equal(stableSlug.body.consultorio.slug, temporary.clinicSlug);
+
+  const shared = await operative.get('/api/consultorio').expect(200);
+  assert.equal(shared.body.consultorio.marca_nombre, 'Sonrisa Norte');
+  assert.ok(shared.body.consultorio.logo_url);
+  assert.ok(shared.body.consultorio.fondo_url);
+  await operative.get(shared.body.consultorio.logo_url).expect(200).expect('Content-Type', /image\/png/);
+  await foreignDoctor.get('/api/consultorio/identidad/logo/imagen').expect(404);
+  const foreignBrand = await foreignDoctor.get('/api/consultorio').expect(200);
+  assert.notEqual(foreignBrand.body.consultorio.marca_nombre, 'Sonrisa Norte');
+
+  await doctor.delete('/api/consultorio/identidad/logo').expect(200);
+  await doctor.delete('/api/consultorio/identidad/fondo').expect(200);
+  await doctor.get('/api/consultorio/identidad/logo/imagen').expect(404);
+  await request(app).get(`/api/publico/clinicas/${temporary.clinicSlug}/logo?v=${encodeURIComponent('archivo-anterior.png')}`).expect(404);
+  const audit = db.prepare(`SELECT COUNT(*) total FROM auditoria WHERE consultorio_id=? AND accion IN ('actualizar_logo','actualizar_fondo')`)
+    .get(temporary.clinic);
+  assert.equal(audit.total, 2);
+});
+
 test('solo el superadministrador puede invitar y administrar consultorios', async () => {
   const doctor = request.agent(app);
   await doctor.post('/api/auth/desarrollo').send({ email: 'integration-doctor@test.local' }).expect(200);
@@ -487,11 +612,19 @@ test('solo el superadministrador puede invitar y administrar consultorios', asyn
   assert.ok(suspended.body.usuarios.some((user) => user.id === invited.body.id));
 
   await admin.delete(`/api/admin/usuarios/${invited.body.id}`).expect(200);
-  assert.ok(db.prepare('SELECT eliminado_en FROM usuarios WHERE id=?').get(invited.body.id).eliminado_en);
+  const deletedUser = db.prepare('SELECT estado,google_sub,eliminado_en FROM usuarios WHERE id=?').get(invited.body.id);
+  assert.equal(deletedUser.estado, 'suspendido');
+  assert.equal(deletedUser.google_sub, null);
+  assert.ok(deletedUser.eliminado_en);
+  const { findOrCreateGoogleUser } = await import('../src/routes/auth.js');
+  assert.throws(() => findOrCreateGoogleUser({ sub: 'deleted-user-sub', email: 'new-clinic@test.local', email_verified: true, name: 'Eliminado' }), /eliminada/i);
 
-  const temporary = db.prepare(`INSERT INTO consultorios (nombre, email) VALUES ('Clínica Temporal','temporal@test.local')`).run();
+  const temporarySlug = uniqueClinicSlug('Clínica Temporal');
+  const temporary = db.prepare(`INSERT INTO consultorios (nombre, email, slug) VALUES ('Clínica Temporal','temporal@test.local',?)`)
+    .run(temporarySlug);
   await admin.delete(`/api/admin/consultorios/${temporary.lastInsertRowid}`).expect(200);
   assert.ok(db.prepare('SELECT eliminado_en FROM consultorios WHERE id=?').get(temporary.lastInsertRowid).eliminado_en);
+  await request(app).get(`/api/publico/clinicas/${temporarySlug}`).expect(404);
 
   const first = clinics.body.consultorios.find((clinic) => clinic.id === fixture.clinicId);
   assert.ok(['activo', 'inactivo', 'abandonado', 'vacio', 'sinusuario'].includes(first.estado_actividad));
@@ -544,6 +677,9 @@ test('solo con invitación se puede crear un consultorio', async (t) => {
   assert.ok(created.body.consultorio_id);
   const active = db.prepare('SELECT estado, consultorio_id FROM usuarios WHERE id=?').get(invitedId);
   assert.equal(active.estado, 'activo');
+  const clinic = db.prepare('SELECT slug FROM consultorios WHERE id=?').get(created.body.consultorio_id);
+  assert.match(clinic.slug, /^clinica-invitacion(?:-\d+)?$/);
+  await request(app).get(`/api/publico/clinicas/${clinic.slug}`).expect(200);
 });
 
 test('un superadmin que tenía rol paciente recupera el portal de doctor', async (t) => {
@@ -566,6 +702,48 @@ test('un superadmin que tenía rol paciente recupera el portal de doctor', async
   const row = db.prepare('SELECT rol, google_sub FROM usuarios WHERE id=?').get(user.id);
   assert.equal(row.rol, 'doctor');
   assert.equal(row.google_sub, `sub-admin-${userId}`);
+});
+
+test('el acceso marcado selecciona la membresía de la clínica correcta', async (t) => {
+  const stamp = `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+  const email = `multiclinica-${stamp}@test.local`;
+  const slugA = uniqueClinicSlug(`Clínica OAuth A ${stamp}`);
+  const slugB = uniqueClinicSlug(`Clínica OAuth B ${stamp}`);
+  const clinicA = Number(db.prepare(`INSERT INTO consultorios (nombre,email,slug) VALUES (?,?,?)`)
+    .run('Clínica OAuth A', `oauth-a-${stamp}@test.local`, slugA).lastInsertRowid);
+  const clinicB = Number(db.prepare(`INSERT INTO consultorios (nombre,email,slug) VALUES (?,?,?)`)
+    .run('Clínica OAuth B', `oauth-b-${stamp}@test.local`, slugB).lastInsertRowid);
+  const userA = Number(db.prepare(`INSERT INTO usuarios (consultorio_id,email,nombre,rol,estado) VALUES (?,?,?,'doctor','preautorizado')`)
+    .run(clinicA, email, 'Doctor Multi A').lastInsertRowid);
+  const userB = Number(db.prepare(`INSERT INTO usuarios (consultorio_id,email,nombre,rol,estado) VALUES (?,?,?,'doctor','preautorizado')`)
+    .run(clinicB, email, 'Doctor Multi B').lastInsertRowid);
+  let adminPatient;
+  t.after(() => db.transaction(() => {
+    if (adminPatient) db.prepare('DELETE FROM usuarios WHERE id=?').run(adminPatient);
+    db.prepare('DELETE FROM usuarios WHERE id IN (?,?)').run(userA, userB);
+    db.prepare('DELETE FROM consultorios WHERE id IN (?,?)').run(clinicA, clinicB);
+  })());
+  const { findOrCreateGoogleUser } = await import('../src/routes/auth.js');
+  const profile = { sub: `sub-${stamp}`, email, email_verified: true, name: 'Doctor Multi' };
+
+  const selectedB = findOrCreateGoogleUser(profile, slugB);
+  assert.equal(selectedB.id, userB);
+  assert.equal(selectedB.consultorio_id, clinicB);
+  assert.equal(selectedB.consultorio_slug, slugB);
+  const selectedA = findOrCreateGoogleUser(profile, slugA);
+  assert.equal(selectedA.id, userA);
+  assert.equal(selectedA.consultorio_id, clinicA);
+  assert.equal(selectedA.consultorio_slug, slugA);
+  assert.throws(() => findOrCreateGoogleUser(profile, fixture.clinicSlug), /no tiene acceso autorizado/i);
+
+  const adminEmail = 'admin@test.local';
+  adminPatient = Number(db.prepare(`INSERT INTO usuarios (consultorio_id,email,nombre,rol,estado)
+    VALUES (?,?,?,'paciente','preautorizado')`).run(clinicB, adminEmail, 'Admin Paciente B').lastInsertRowid);
+  const selectedPatient = findOrCreateGoogleUser({ sub: `sub-admin-patient-${stamp}`, email: adminEmail,
+    email_verified: true, name: 'Admin Paciente B' }, slugB);
+  assert.equal(selectedPatient.id, adminPatient);
+  assert.equal(selectedPatient.consultorio_id, clinicB);
+  assert.equal(selectedPatient.rol, 'paciente');
 });
 
 test('cotizaciones: servicios del catálogo con o sin precio, edición y aislamiento por consultorio', async () => {
@@ -691,7 +869,45 @@ test('cotizaciones: enlace público, borrador oculto, estado entregado visible y
   await request(app).get(`/api/presupuestos/publico/token-inventado-1234567890`).expect(404);
 });
 
-test('mantenimiento: limpia notificaciones, auditoría, huérfanos en uploads y aplica WAL checkpoint', async () => {
+test('eliminar un consultorio revoca sesión y cotizaciones públicas', async (t) => {
+  const stamp = `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+  const slug = uniqueClinicSlug(`Clínica Eliminada ${stamp}`);
+  const clinicId = Number(db.prepare(`INSERT INTO consultorios (nombre,email,slug) VALUES (?,?,?)`)
+    .run('Clínica Eliminada', `eliminada-${stamp}@test.local`, slug).lastInsertRowid);
+  const doctorId = Number(db.prepare(`INSERT INTO usuarios (consultorio_id,email,nombre,rol,estado) VALUES (?,?,?,'doctor','activo')`)
+    .run(clinicId, `doctor-eliminado-${stamp}@test.local`, 'Doctor Eliminado').lastInsertRowid);
+  const patientId = Number(db.prepare(`INSERT INTO pacientes (consultorio_id,codigo,nombres,apellidos)
+    VALUES (?,?,?,?)`).run(clinicId, `9${Date.now()}`, 'Paciente', 'Eliminado').lastInsertRowid);
+  const quoteId = Number(db.prepare(`INSERT INTO presupuestos (consultorio_id,paciente_id,titulo,estado,token_publico,creado_por)
+    VALUES (?,?,?,'entregado',?,?)`).run(clinicId, patientId, 'Cotización eliminada', `token-eliminado-${stamp}`, doctorId).lastInsertRowid);
+  db.prepare(`INSERT INTO presupuesto_items (presupuesto_id,nombre,cantidad,precio_bs,posicion)
+    VALUES (?,?,1,100,0)`).run(quoteId, 'Servicio eliminado');
+  t.after(() => db.transaction(() => {
+    db.prepare('DELETE FROM auditoria WHERE consultorio_id=?').run(clinicId);
+    db.prepare('DELETE FROM presupuesto_items WHERE presupuesto_id=?').run(quoteId);
+    db.prepare('DELETE FROM presupuestos WHERE id=?').run(quoteId);
+    db.prepare('DELETE FROM pacientes WHERE id=?').run(patientId);
+    db.prepare('DELETE FROM usuarios WHERE id=?').run(doctorId);
+    db.prepare('DELETE FROM consultorios WHERE id=?').run(clinicId);
+  })());
+
+  const token = jwt.sign({ sub: String(doctorId), consultorioId: clinicId, rol: 'doctor' }, config.jwtSecret, { expiresIn: '1d' });
+  await request(app).get(`/api/presupuestos/publico/token-eliminado-${stamp}`).expect(200);
+  db.prepare(`UPDATE consultorios SET eliminado_en=CURRENT_TIMESTAMP WHERE id=?`).run(clinicId);
+  await request(app).get(`/api/presupuestos/publico/token-eliminado-${stamp}`).expect(404);
+  await request(app).get('/api/agenda').set('Cookie', `dentista_token=${token}`).expect(401);
+});
+
+test('un archivo público faltante responde 404 sin interrumpir el servidor', async (t) => {
+  const slug = uniqueClinicSlug(`Clínica Archivo Faltante ${Date.now()}`);
+  const clinicId = Number(db.prepare(`INSERT INTO consultorios (nombre,email,slug,logo_path)
+    VALUES (?,?,?,?)`).run('Clínica Archivo Faltante', `faltante-${Date.now()}@test.local`, slug, 'no-existe.png').lastInsertRowid);
+  t.after(() => db.prepare('DELETE FROM consultorios WHERE id=?').run(clinicId));
+  await request(app).get(`/api/publico/clinicas/${slug}/logo?v=no-existe.png`).expect(404);
+  await request(app).get('/api/health').expect(200);
+});
+
+test('mantenimiento: conserva archivos de marca y limpia uploads huérfanos', async () => {
   const { runMaintenance } = await import('../src/maintenance.js');
   const { config } = await import('../src/config.js');
   const oldDate = new Date(Date.now() - 200 * 86400000).toISOString().slice(0, 19).replace('T', ' ');
@@ -710,6 +926,11 @@ test('mantenimiento: limpia notificaciones, auditoría, huérfanos en uploads y 
   const orphanName = `orphan-test-${Date.now()}.png`;
   const orphanPath = path.join(config.uploadDir, orphanName);
   fs.writeFileSync(orphanPath, Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]));
+  const brandName = `brand-test-${Date.now()}.png`;
+  const brandPath = path.join(config.uploadDir, brandName);
+  fs.writeFileSync(brandPath, Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]));
+  const previousBrand = db.prepare('SELECT logo_path FROM consultorios WHERE id=?').get(fixture.clinicId).logo_path;
+  db.prepare('UPDATE consultorios SET logo_path=? WHERE id=?').run(brandName, fixture.clinicId);
 
   try {
     const pasos = runMaintenance({ auditoriaDays: 100, notificacionesDays: 90, vacuum: false });
@@ -723,8 +944,11 @@ test('mantenimiento: limpia notificaciones, auditoría, huérfanos en uploads y 
     assert.equal(db.prepare('SELECT id FROM auditoria WHERE id=?').get(oldAudit), undefined);
     assert.ok(db.prepare('SELECT id FROM auditoria WHERE id=?').get(newAudit));
     assert.equal(fs.existsSync(orphanPath), false, 'huérfano debe ser eliminado');
+    assert.equal(fs.existsSync(brandPath), true, 'logo referenciado debe conservarse');
   } finally {
     if (fs.existsSync(orphanPath)) fs.unlinkSync(orphanPath);
+    if (fs.existsSync(brandPath)) fs.unlinkSync(brandPath);
+    db.prepare('UPDATE consultorios SET logo_path=? WHERE id=?').run(previousBrand, fixture.clinicId);
     db.prepare('DELETE FROM notificaciones WHERE id IN (?, ?)').run(oldNotif, newNotif);
     db.prepare('DELETE FROM auditoria WHERE id IN (?, ?)').run(oldAudit, newAudit);
   }

@@ -11,9 +11,14 @@ function daysAgo(days) {
 
 function findOrphanUploads() {
   const referenced = new Set();
-  for (const row of db.prepare(`SELECT qr_path FROM consultorios
-    WHERE qr_path IS NOT NULL AND eliminado_en IS NULL`).all()) {
-    if (row.qr_path) referenced.add(path.basename(row.qr_path));
+  for (const row of db.prepare(`SELECT qr_path, logo_path, fondo_path FROM consultorios
+    WHERE eliminado_en IS NULL`).all()) {
+    for (const file of [row.qr_path, row.logo_path, row.fondo_path]) {
+      if (file) referenced.add(path.basename(file));
+    }
+  }
+  for (const row of db.prepare(`SELECT slug FROM consultorios WHERE eliminado_en IS NULL AND slug IS NOT NULL`).all()) {
+    for (const size of [180, 192, 512]) referenced.add(`brand-${row.slug}-${size}.png`);
   }
   for (const row of db.prepare(`SELECT evidencia_path FROM pagos
     WHERE evidencia_path IS NOT NULL AND eliminado_en IS NULL`).all()) {

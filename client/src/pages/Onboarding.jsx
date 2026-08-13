@@ -32,7 +32,7 @@ export default function Onboarding() {
 
   return (
     <div className="onboarding-page">
-      <div className="onboarding-brand"><span className="brand-mark"><Icon name="tooth" /></span><span>SONRIDENT</span></div>
+      <div className="onboarding-brand"><span className="brand-mark"><Icon name="tooth" /></span><span>PORTAL CLÍNICO</span></div>
       <main className="onboarding-card">
         <div className="step-count">01 <span>/ 01</span></div>
         <span className="eyebrow">TU NUEVO ESPACIO</span><h1>Dale identidad a tu consultorio.</h1><p>Esta información será visible para pacientes y equipo. Podrás cambiarla más adelante.</p>

@@ -22,7 +22,7 @@ export function sendEmail(message) {
 export async function sendAppointmentEmail(appointmentId, type) {
   if (!smtpConfigured()) return false;
   const appointment = db.prepare(`SELECT c.inicio,c.fin,c.precio_bs,p.email,p.nombres,p.recordatorios_activos,
-      u.nombre doctor,s.nombre servicio,co.nombre consultorio,co.telefono
+      u.nombre doctor,s.nombre servicio,co.nombre consultorio,co.marca_nombre,co.telefono
     FROM citas c
     JOIN pacientes p ON p.id=c.paciente_id AND p.consultorio_id=c.consultorio_id
     JOIN usuarios u ON u.id=c.doctor_id AND u.consultorio_id=c.consultorio_id
@@ -38,6 +38,7 @@ export async function sendAppointmentEmail(appointmentId, type) {
     timeZone: 'America/La_Paz', hour: '2-digit', minute: '2-digit', hour12: false
   }).format(new Date(appointment.fin));
   const reprogrammed = type === 'reprogramacion';
+  const brand = appointment.marca_nombre || appointment.consultorio;
   const heading = reprogrammed ? 'Tu cita fue reprogramada' : 'Tu cita está confirmada';
   const phone = appointment.telefono ? `\nTeléfono de la clínica: ${appointment.telefono}` : '';
   const priceLine = appointment.precio_bs === null
@@ -45,7 +46,7 @@ export async function sendAppointmentEmail(appointmentId, type) {
     : `\nPrecio: Bs ${new Intl.NumberFormat('es-BO', { maximumFractionDigits: 2 }).format(appointment.precio_bs)}`;
   return sendEmail({
     to: appointment.email,
-    subject: `${reprogrammed ? 'Cita reprogramada' : 'Confirmación de cita'} - SONRIDENT`,
-    text: `SONRIDENT\n\nHola ${appointment.nombres},\n\n${heading}.\nServicio: ${appointment.servicio}\nDoctor: ${appointment.doctor}\nFecha y hora: ${date} hasta ${endTime}${phone}${priceLine}\n\nTe esperamos en ${appointment.consultorio}.`
+    subject: `${reprogrammed ? 'Cita reprogramada' : 'Confirmación de cita'} - ${brand}`,
+    text: `${brand}\n\nHola ${appointment.nombres},\n\n${heading}.\nServicio: ${appointment.servicio}\nDoctor: ${appointment.doctor}\nFecha y hora: ${date} hasta ${endTime}${phone}${priceLine}\n\nTe esperamos en ${appointment.consultorio}.`
   });
 }

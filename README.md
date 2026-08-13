@@ -6,6 +6,9 @@ aislada.
 
 Producción: https://sonrident.copaapp.cloud
 
+Dominio neutral previsto: `https://clinicas.copaapp.cloud`. Cada consultorio
+recibe una PWA instalable en `/c/<slug>` con su nombre, logo y colores.
+
 ## Funciones actuales
 
 - Acceso con Google OAuth y cookie JWT HTTP-only.
@@ -23,6 +26,7 @@ Producción: https://sonrident.copaapp.cloud
 - Backups locales WAL-safe + exportación ZIP por consultorio.
 - Rate limiting en `/api/auth`, `/api/admin` y `/api`.
 - Auditoría filtrable y borrado lógico.
+- PWA instalable por consultorio, con enlace y QR automáticos.
 
 ## Tecnología
 
@@ -73,7 +77,7 @@ cd ../client
 npm run build
 ```
 
-Estado verificado (agosto 2026): **18/18 tests** del servidor y build del cliente OK.
+Estado verificado (agosto 2026): **24/24 tests**, smoke de producción y builds OK.
 
 ## Demo de agenda (presentación)
 

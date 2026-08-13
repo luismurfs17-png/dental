@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { Navigate } from 'react-router-dom'
+import { Navigate, useSearchParams } from 'react-router-dom'
 import { useAuth } from '../context/AuthContext.jsx'
 import { api } from '../lib/api.js'
 import { homeFor } from './Login.jsx'
@@ -7,8 +7,14 @@ import { Loading } from '../components/UI.jsx'
 
 export default function AuthSuccess() {
   const { user, setUser } = useAuth()
+  const [searchParams] = useSearchParams()
   const [error, setError] = useState('')
   const [done, setDone] = useState(false)
+  const clinic = searchParams.get('clinica')
+
+  useEffect(() => {
+    if (clinic) sessionStorage.setItem('clinic_portal_slug', clinic)
+  }, [clinic])
 
   useEffect(() => {
     let active = true
@@ -41,5 +47,7 @@ export default function AuthSuccess() {
 
   if (!done && !user) return <Loading label="Iniciando sesión…" />
   if (user) return <Navigate to={homeFor(user)} replace />
-  return <Navigate to={`/login?error=${encodeURIComponent(error || 'No se pudo iniciar sesión')}`} replace />
+  const inClinicApp = /^\/c\/[a-z0-9]+(?:-[a-z0-9]+)*(?:\/|$)/.test(window.location.pathname)
+  const loginPath = inClinicApp ? '/' : clinic ? `/c/${encodeURIComponent(clinic)}` : '/login'
+  return <Navigate to={`${loginPath}?error=${encodeURIComponent(error || 'No se pudo iniciar sesión')}`} replace />
 }

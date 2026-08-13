@@ -1,10 +1,11 @@
-import { db } from './db.js';
+import { db, uniqueClinicSlug } from './db.js';
 
 const seed = db.transaction(() => {
   let clinic = db.prepare(`SELECT id FROM consultorios WHERE email='contacto@sonrisas.test' AND eliminado_en IS NULL`).get();
   if (!clinic) {
-    const result = db.prepare(`INSERT INTO consultorios (nombre,nit,telefono,email,direccion)
-      VALUES ('Clínica SONRIDENT Demo','1020304050','+591 70000001','contacto@sonrisas.test','Av. Ficticia 123, La Paz')`).run();
+    const result = db.prepare(`INSERT INTO consultorios (nombre,slug,nit,telefono,email,direccion)
+      VALUES ('Clínica SONRIDENT Demo',?,'1020304050','+591 70000001','contacto@sonrisas.test','Av. Ficticia 123, La Paz')`)
+      .run(uniqueClinicSlug('Clínica SONRIDENT Demo'));
     clinic = { id: Number(result.lastInsertRowid) };
   }
   db.prepare(`UPDATE consultorios SET nombre='Clínica SONRIDENT Demo' WHERE id=? AND nombre='Clínica Sonrisas Andinas'`).run(clinic.id);

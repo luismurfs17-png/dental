@@ -17,10 +17,20 @@ import { ApiError, asyncRoute, required } from '../http.js';
 const router = Router();
 const google = new OAuth2Client(config.google.clientId, config.google.clientSecret, config.google.callbackUrl);
 
-function loginRedirect(res, params = {}) {
+function clinicLoginPath(slug) {
+  return slug ? `/c/${slug}` : '/login';
+}
+
+function loginRedirect(res, params = {}, clinicSlug = '') {
   const query = new URLSearchParams(params);
   const suffix = query.toString() ? `?${query}` : '';
-  return res.redirect(`${config.clientUrl}/login${suffix}`);
+  return res.redirect(`${config.clientUrl}${clinicLoginPath(clinicSlug)}${suffix}`);
+}
+
+function loginClinic(value) {
+  const slug = String(value || '').trim().toLowerCase();
+  if (!slug || !/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(slug)) return '';
+  return db.prepare('SELECT slug FROM consultorios WHERE slug=? AND eliminado_en IS NULL').get(slug)?.slug || '';
 }
 
 function resolveLoginEstado(user, isAdminEmail) {
@@ -47,17 +57,26 @@ function bindGoogleUser(userId, { sub, email, name, picture, estado }) {
   }
 }
 
-export function findOrCreateGoogleUser(profile) {
+export function findOrCreateGoogleUser(profile, clinicSlug = '') {
   if (!profile.email_verified) throw new ApiError(401, 'Google no verificó el correo electrónico');
   const email = String(profile.email || '').trim().toLowerCase();
   if (!email) throw new ApiError(401, 'Google no devolvió un correo válido');
   const isAdminEmail = config.adminEmails.includes(email);
   const name = profile.name || email;
   const picture = profile.picture || null;
+  const targetClinic = clinicSlug ? db.prepare(`SELECT id, slug FROM consultorios
+    WHERE slug=? AND eliminado_en IS NULL`).get(clinicSlug) : null;
 
-  let user = db.prepare(`SELECT * FROM usuarios WHERE google_sub = ? ORDER BY
+  let user = targetClinic ? db.prepare(`SELECT * FROM usuarios
+    WHERE consultorio_id=? AND (google_sub=? OR email=? COLLATE NOCASE) AND eliminado_en IS NULL
+    ORDER BY CASE WHEN google_sub=? THEN 0 ELSE 1 END, id LIMIT 1`)
+    .get(targetClinic.id, profile.sub, email, profile.sub) : null;
+  if (targetClinic && !user) {
+    throw new ApiError(403, 'Este correo no tiene acceso autorizado a la clínica seleccionada');
+  }
+  if (!user) user = db.prepare(`SELECT * FROM usuarios WHERE google_sub = ? ORDER BY
     CASE WHEN eliminado_en IS NULL THEN 0 ELSE 1 END, id LIMIT 1`).get(profile.sub);
-  if (!user) {
+  if (!user && !targetClinic) {
     user = db.prepare(`SELECT * FROM usuarios
       WHERE email = ? COLLATE NOCASE
       ORDER BY CASE
@@ -68,12 +87,14 @@ export function findOrCreateGoogleUser(profile) {
       END, id LIMIT 1`).get(email);
   }
 
+  if (user?.eliminado_en) throw new ApiError(403, 'La cuenta fue eliminada. Contacte al administrador.');
+
   if (user?.estado === 'suspendido' && !isAdminEmail) {
     throw new ApiError(403, 'El usuario está suspendido');
   }
 
   if (user) {
-    if (isAdminEmail && user.rol === 'paciente') {
+    if (!targetClinic && isAdminEmail && user.rol === 'paciente') {
       const doctor = db.prepare(`SELECT * FROM usuarios
         WHERE email = ? COLLATE NOCASE AND rol IN ('doctor','operativo') AND eliminado_en IS NULL
         ORDER BY id LIMIT 1`).get(email);
@@ -108,8 +129,10 @@ export function findOrCreateGoogleUser(profile) {
     }
   }
 
-  const fresh = db.prepare(`SELECT id, consultorio_id, email, nombre, avatar_url, rol, estado
-    FROM usuarios WHERE id = ? AND eliminado_en IS NULL`).get(user.id);
+  const fresh = db.prepare(`SELECT u.id, u.consultorio_id, u.email, u.nombre, u.avatar_url, u.rol, u.estado,
+      c.slug consultorio_slug
+    FROM usuarios u LEFT JOIN consultorios c ON c.id=u.consultorio_id AND c.eliminado_en IS NULL
+    WHERE u.id = ? AND u.eliminado_en IS NULL AND (u.consultorio_id IS NULL OR c.id IS NOT NULL)`).get(user.id);
   if (!fresh) throw new ApiError(500, 'No se pudo cargar el usuario autenticado');
   if (!['activo', 'pendiente'].includes(fresh.estado)) {
     throw new ApiError(403, 'El usuario no tiene acceso activo');
@@ -117,12 +140,13 @@ export function findOrCreateGoogleUser(profile) {
   return withAdminFlag(fresh);
 }
 
-router.get('/google', (_req, res, next) => {
+router.get('/google', (req, res, next) => {
   try {
     if (!config.google.clientId || !config.google.clientSecret) {
       throw new ApiError(503, 'El acceso con Google no está configurado');
     }
-    const state = randomBytes(24).toString('hex');
+    const clinicSlug = loginClinic(req.query.clinica);
+    const state = `${randomBytes(24).toString('hex')}${clinicSlug ? `.${clinicSlug}` : ''}`;
     setOAuthState(res, state);
     res.redirect(google.generateAuthUrl({
       access_type: 'offline',
@@ -136,8 +160,8 @@ router.get('/google', (_req, res, next) => {
 });
 
 router.get('/google/callback', asyncRoute(async (req, res) => {
+  let clinicSlug = '';
   try {
-    if (!req.query.code) throw new ApiError(400, 'Google no devolvió un código de autorización');
     const receivedState = String(req.query.state || '');
     const expectedState = readOAuthState(req);
     clearOAuthState(res);
@@ -145,18 +169,22 @@ router.get('/google/callback', asyncRoute(async (req, res) => {
       && receivedState.length === expectedState.length
       && timingSafeEqual(Buffer.from(receivedState), Buffer.from(expectedState));
     if (!validState) throw new ApiError(401, 'La solicitud de acceso con Google no es válida. Intente de nuevo.');
+    clinicSlug = loginClinic(expectedState.split('.').slice(1).join('.'));
+    if (!req.query.code) throw new ApiError(400, req.query.error ? 'El acceso con Google fue cancelado' : 'Google no devolvió un código de autorización');
 
     const { tokens } = await google.getToken(String(req.query.code));
     if (!tokens.id_token) throw new ApiError(401, 'Google no devolvió un token válido');
     const ticket = await google.verifyIdToken({ idToken: tokens.id_token, audience: config.google.clientId });
-    const user = findOrCreateGoogleUser(ticket.getPayload());
+    const user = findOrCreateGoogleUser(ticket.getPayload(), clinicSlug);
     issueSession(res, user);
     console.log(`OAuth OK: ${user.email} (id=${user.id}, admin=${Boolean(user.es_admin)}, estado=${user.estado})`);
-    return res.redirect(303, `${config.clientUrl}/auth/success`);
+    const suffix = clinicSlug ? `?clinica=${encodeURIComponent(clinicSlug)}` : '';
+    const successPath = clinicSlug ? `/c/${clinicSlug}/auth/success` : '/auth/success';
+    return res.redirect(303, `${config.clientUrl}${successPath}${suffix}`);
   } catch (error) {
     console.error('OAuth callback error:', error?.message || error);
     const message = error instanceof ApiError ? error.message : 'No se pudo completar el acceso con Google';
-    return loginRedirect(res, { error: message });
+    return loginRedirect(res, { error: message }, clinicSlug);
   }
 }));
 
@@ -164,7 +192,7 @@ router.post('/google', asyncRoute(async (req, res) => {
   required(req.body, ['credencial']);
   if (!config.google.clientId) throw new ApiError(503, 'El acceso con Google no está configurado');
   const ticket = await google.verifyIdToken({ idToken: req.body.credencial, audience: config.google.clientId });
-  const user = findOrCreateGoogleUser(ticket.getPayload());
+  const user = findOrCreateGoogleUser(ticket.getPayload(), loginClinic(req.body.clinica));
   issueSession(res, user);
   res.json({ mensaje: 'Sesión iniciada correctamente', usuario: user });
 }));
@@ -173,8 +201,10 @@ router.post('/desarrollo', (req, res, next) => {
   try {
     if (config.nodeEnv !== 'development') throw new ApiError(404, 'Ruta no encontrada');
     const email = req.body.email || 'doctora@sonrisas.test';
-    const user = db.prepare(`SELECT id, consultorio_id, email, nombre, avatar_url, rol, estado
-      FROM usuarios WHERE email = ? COLLATE NOCASE AND eliminado_en IS NULL LIMIT 1`).get(email);
+    const user = db.prepare(`SELECT u.id, u.consultorio_id, u.email, u.nombre, u.avatar_url, u.rol, u.estado,
+        c.slug consultorio_slug
+      FROM usuarios u LEFT JOIN consultorios c ON c.id=u.consultorio_id AND c.eliminado_en IS NULL
+      WHERE u.email = ? COLLATE NOCASE AND u.eliminado_en IS NULL LIMIT 1`).get(email);
     if (!user || user.estado !== 'activo') throw new ApiError(404, 'Usuario de desarrollo no encontrado; ejecute la semilla');
     issueSession(res, user);
     res.json({ mensaje: 'Sesión de desarrollo iniciada', usuario: withAdminFlag(user) });
