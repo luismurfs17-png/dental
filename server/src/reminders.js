@@ -1,11 +1,18 @@
 import cron from 'node-cron';
 import { config } from './config.js';
 import { db } from './db.js';
-import { sendEmail, smtpConfigured } from './email.js';
+import { sendReminderEmail, smtpConfigured } from './email.js';
+
+function anyEmailConfigured() {
+  if (smtpConfigured()) return true;
+  return Boolean(db.prepare(`SELECT 1 FROM consultorio_email
+    WHERE modo='propio' AND activo=1 AND smtp_user IS NOT NULL AND smtp_pass_cifrado IS NOT NULL
+    LIMIT 1`).get());
+}
 
 export function startReminders() {
-  if (!smtpConfigured()) {
-    console.log('Recordatorios por correo desactivados: SMTP no configurado');
+  if (!anyEmailConfigured()) {
+    console.log('Recordatorios por correo desactivados: sin SMTP global ni correos de consultorios configurados');
     return null;
   }
   if (!cron.validate(config.smtp.cron)) {
@@ -13,12 +20,10 @@ export function startReminders() {
     return null;
   }
   return cron.schedule(config.smtp.cron, async () => {
-    const rows = db.prepare(`SELECT c.id, c.consultorio_id, c.inicio, c.precio_bs, p.email, p.nombres,
-      co.nombre consultorio, co.marca_nombre, s.nombre servicio
+    const rows = db.prepare(`SELECT c.id, c.consultorio_id, p.email
       FROM citas c
       JOIN pacientes p ON p.id = c.paciente_id AND p.consultorio_id = c.consultorio_id
-       JOIN consultorios co ON co.id = c.consultorio_id AND co.eliminado_en IS NULL
-      JOIN servicios s ON s.id = c.servicio_id AND s.consultorio_id = c.consultorio_id
+      JOIN consultorios co ON co.id = c.consultorio_id AND co.eliminado_en IS NULL
       LEFT JOIN email_recordatorios er ON er.cita_id = c.id AND er.consultorio_id = c.consultorio_id
         AND er.destinatario = p.email AND er.estado = 'enviado'
       WHERE c.estado = 'confirmada' AND c.eliminado_en IS NULL AND p.eliminado_en IS NULL
@@ -27,18 +32,18 @@ export function startReminders() {
       .all(`+${config.smtp.hours} hours`);
     for (const row of rows) {
       try {
-        const date = new Intl.DateTimeFormat('es-BO', { timeZone: 'America/La_Paz', dateStyle: 'full', timeStyle: 'short' }).format(new Date(row.inicio));
-        const price = row.precio_bs === null ? 'Precio: se define en la consulta.' : `Precio: Bs ${new Intl.NumberFormat('es-BO', { maximumFractionDigits: 2 }).format(row.precio_bs)}`;
-        const brand = row.marca_nombre || row.consultorio;
-        await sendEmail({
-          to: row.email,
-          subject: `Recordatorio de cita - ${brand}`,
-          text: `${brand}\n\nHola ${row.nombres}, le recordamos su cita de ${row.servicio} para ${date}. ${price} Consultorio: ${row.consultorio}.`
-        });
-        db.prepare(`INSERT INTO email_recordatorios
-          (consultorio_id, cita_id, destinatario, estado, error) VALUES (?, ?, ?, 'enviado', NULL)
-          ON CONFLICT(consultorio_id, cita_id, destinatario) DO UPDATE SET estado='enviado', error=NULL, creado_en=CURRENT_TIMESTAMP`)
-          .run(row.consultorio_id, row.id, row.email);
+        const sent = await sendReminderEmail(row.id);
+        if (sent) {
+          db.prepare(`INSERT INTO email_recordatorios
+            (consultorio_id, cita_id, destinatario, estado, error) VALUES (?, ?, ?, 'enviado', NULL)
+            ON CONFLICT(consultorio_id, cita_id, destinatario) DO UPDATE SET estado='enviado', error=NULL, creado_en=CURRENT_TIMESTAMP`)
+            .run(row.consultorio_id, row.id, row.email);
+        } else {
+          db.prepare(`INSERT INTO email_recordatorios
+            (consultorio_id, cita_id, destinatario, estado, error) VALUES (?, ?, ?, 'error', ?)
+            ON CONFLICT(consultorio_id, cita_id, destinatario) DO UPDATE SET estado='error', error=excluded.error, creado_en=CURRENT_TIMESTAMP`)
+            .run(row.consultorio_id, row.id, row.email, 'Correo no enviado: sin SMTP configurado para esta clínica');
+        }
       } catch (error) {
         db.prepare(`INSERT INTO email_recordatorios
           (consultorio_id, cita_id, destinatario, estado, error) VALUES (?, ?, ?, 'error', ?)

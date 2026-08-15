@@ -7,8 +7,9 @@ import { authenticate, allowRoles, requireTenant } from '../auth.js';
 import { config } from '../config.js';
 import { audit, db, uniqueClinicSlug } from '../db.js';
 import { createClinicIcons, removeClinicIcons, validateClinicImage } from '../branding.js';
-import { sendAppointmentEmail } from '../email.js';
-import { ApiError, positiveNumber, required } from '../http.js';
+import { sendAppointmentEmail, sendClinicEmail, sendTestEmail, sendWelcomeEmail, getClinicEmailConfig, clearClinicTransporter } from '../email.js';
+import { encryptSecret } from '../crypto.js';
+import { ApiError, asyncRoute, positiveNumber, required } from '../http.js';
 
 const router = Router();
 router.get('/presupuestos/publico/:token', (req, res) => {
@@ -172,6 +173,14 @@ router.post('/consultorio/onboarding', allowRoles('doctor'), (req, res, next) =>
       audit(clinic.lastInsertRowid, req.user.id, 'crear', 'consultorio', clinic.lastInsertRowid, { nombre: req.body.nombre }, req.ip);
       return clinic.lastInsertRowid;
     })();
+    const clinic = db.prepare(`SELECT * FROM consultorios WHERE id=?`).get(result);
+    void sendWelcomeEmail({
+      consultorioId: result,
+      to: req.user.email,
+      patientName: req.user.nombre || 'doctor',
+      portalUrl: `${config.clientUrl}${clinic.slug ? `/c/${clinic.slug}` : ''}`,
+      installUrl: `${config.clientUrl}${clinic.slug ? `/c/${clinic.slug}/instalar` : '/instalar'}`
+    }).catch(() => {});
     res.status(201).json({ mensaje: 'Consultorio creado correctamente', consultorio_id: result });
   } catch (error) { next(error); }
 });
@@ -255,6 +264,93 @@ router.get('/consultorio/qr', (req, res) => {
   const clinic = db.prepare('SELECT qr_path FROM consultorios WHERE id=? AND eliminado_en IS NULL').get(tenant(req));
   if (!clinic?.qr_path) throw new ApiError(404, 'El consultorio no ha cargado un QR');
   res.sendFile(path.join(config.uploadDir, path.basename(clinic.qr_path)));
+});
+
+function emailConfigJson(consultorioId) {
+  const row = db.prepare(`SELECT modo, smtp_host, smtp_port, smtp_secure, smtp_user, smtp_from,
+      activo, verificado_en, ultimo_error
+    FROM consultorio_email WHERE consultorio_id = ?`).get(consultorioId);
+  const clinic = db.prepare(`SELECT email FROM consultorios WHERE id=? AND eliminado_en IS NULL`).get(consultorioId);
+  return {
+    configurado: Boolean(row),
+    modo: row?.modo || 'global',
+    smtp_host: row?.smtp_host || null,
+    smtp_port: row?.smtp_port || null,
+    smtp_secure: Boolean(row?.smtp_secure),
+    smtp_user: row?.smtp_user || null,
+    smtp_from: row?.smtp_from || null,
+    activo: row?.activo ?? 1,
+    verificado_en: row?.verificado_en || null,
+    ultimo_error: row?.ultimo_error || null,
+    global_activo: Boolean(config.smtp.host && config.smtp.user && config.smtp.pass),
+    global_remitente: config.smtp.from || null,
+    correo_consultorio: clinic?.email || null
+  };
+}
+
+router.get('/correo/configuracion', allowRoles('doctor'), (req, res) => {
+  res.json({ configuracion: emailConfigJson(tenant(req)) });
+});
+
+router.put('/correo/configuracion', allowRoles('doctor'), (req, res) => {
+  const consultorioId = tenant(req);
+  const clinic = db.prepare(`SELECT id FROM consultorios WHERE id=? AND eliminado_en IS NULL`).get(consultorioId);
+  if (!clinic) throw new ApiError(404, 'Consultorio no encontrado');
+  const modo = req.body.modo === 'propio' ? 'propio' : 'global';
+  if (modo === 'propio') {
+    if (!req.body.smtp_user) {
+      throw new ApiError(400, 'Para usar el correo propio debe indicar el usuario SMTP');
+    }
+    const port = Number(req.body.smtp_port || 587);
+    if (!Number.isInteger(port) || port < 1 || port > 65535) {
+      throw new ApiError(400, 'El puerto SMTP es inválido');
+    }
+    const existing = db.prepare(`SELECT smtp_pass_cifrado FROM consultorio_email WHERE consultorio_id=? AND modo='propio'`)
+      .get(consultorioId);
+    const pass = String(req.body.smtp_pass || '').trim();
+    if (!pass && !existing?.smtp_pass_cifrado) {
+      throw new ApiError(400, 'Debe indicar la contraseña de aplicación la primera vez');
+    }
+    db.prepare(`INSERT INTO consultorio_email
+      (consultorio_id, modo, smtp_host, smtp_port, smtp_secure, smtp_user, smtp_pass_cifrado, smtp_from, activo, ultimo_error, actualizado_en)
+      VALUES (?, 'propio', ?, ?, ?, ?, ?, ?, 1, NULL, CURRENT_TIMESTAMP)
+      ON CONFLICT(consultorio_id) DO UPDATE SET
+        modo='propio', smtp_host=excluded.smtp_host, smtp_port=excluded.smtp_port, smtp_secure=excluded.smtp_secure,
+        smtp_user=excluded.smtp_user, smtp_pass_cifrado=excluded.smtp_pass_cifrado, smtp_from=excluded.smtp_from,
+        activo=1, ultimo_error=NULL, verificado_en=NULL, actualizado_en=CURRENT_TIMESTAMP`)
+      .run(consultorioId, String(req.body.smtp_host || 'smtp.gmail.com').trim(),
+        port, req.body.smtp_secure === true ? 1 : 0,
+        String(req.body.smtp_user).trim(), pass ? encryptSecret(pass) : existing.smtp_pass_cifrado,
+        String(req.body.smtp_from || '').trim() || null);
+    clearClinicTransporter(consultorioId);
+    log(req, 'configurar_correo', 'consultorio', consultorioId, { modo: 'propio' });
+  } else {
+    db.prepare(`INSERT INTO consultorio_email (consultorio_id, modo, activo, ultimo_error, actualizado_en)
+      VALUES (?, 'global', 1, NULL, CURRENT_TIMESTAMP)
+      ON CONFLICT(consultorio_id) DO UPDATE SET modo='global', smtp_user=NULL, smtp_pass_cifrado=NULL,
+        activo=1, ultimo_error=NULL, verificado_en=NULL, actualizado_en=CURRENT_TIMESTAMP`)
+      .run(consultorioId);
+    clearClinicTransporter(consultorioId);
+    log(req, 'configurar_correo', 'consultorio', consultorioId, { modo: 'global' });
+  }
+  res.json({ mensaje: 'Configuración de correo actualizada', configuracion: emailConfigJson(consultorioId) });
+});
+
+router.post('/correo/probar', allowRoles('doctor'), asyncRoute(async (req, res) => {
+  const consultorioId = tenant(req);
+  const to = String(req.body.correo || '').trim();
+  if (!to) throw new ApiError(400, 'Indique el correo de destino de la prueba');
+  const sent = await sendTestEmail(consultorioId, to);
+  if (!sent) throw new ApiError(400, 'No se pudo enviar el correo de prueba. Revise la configuración o que el correo global esté activo.');
+  log(req, 'correo_prueba', 'consultorio', consultorioId, { destino: to });
+  res.json({ mensaje: 'Correo de prueba enviado correctamente' });
+}));
+
+router.get('/correo/envios', allowRoles('doctor'), (req, res) => {
+  const rows = db.prepare(`SELECT id, destinatario, tipo, canal, estado, error, intentos, creado_en
+    FROM envios_notificacion WHERE consultorio_id = ?
+    ORDER BY id DESC LIMIT 100`).all(tenant(req));
+  res.json({ envios: rows });
 });
 router.post('/consultorio/identidad/:tipo', allowRoles('doctor'), (req, res, next) => {
   let asset;
@@ -433,6 +529,16 @@ router.post('/pacientes', allowRoles('doctor', 'operativo'), (req, res) => {
     })();
     log(req, 'crear', 'paciente', patientId, { codigo: code, nombres: req.body.nombres, apellidos: req.body.apellidos }, patientId);
     const patient = db.prepare('SELECT * FROM pacientes WHERE id=? AND consultorio_id=?').get(patientId, tenant(req));
+    if (patient?.email) {
+      const clinic = db.prepare(`SELECT slug FROM consultorios WHERE id=?`).get(tenant(req));
+      void sendWelcomeEmail({
+        consultorioId: tenant(req),
+        to: patient.email,
+        patientName: `${patient.nombres} ${patient.apellidos || ''}`.trim(),
+        portalUrl: `${config.clientUrl}${clinic?.slug ? `/c/${clinic.slug}` : ''}`,
+        installUrl: `${config.clientUrl}${clinic?.slug ? `/c/${clinic.slug}/instalar` : '/instalar'}`
+      }).catch(() => {});
+    }
     res.status(201).json({ mensaje: 'Paciente registrado correctamente', paciente: patient });
   } catch (error) {
     if (duplicatePatientCode(error)) throw new ApiError(409, 'El código del paciente ya está registrado en el consultorio');
@@ -1040,6 +1146,30 @@ router.patch('/citas/:id/cancelar', allowRoles('paciente'), (req, res) => {
         appointmentId);
   })();
   log(req, 'cancelar', 'cita', appointmentId, { motivo_cancelacion: reason, menos_de_24_horas: under24Hours }, appointment.paciente_id);
+  const doctorForEmail = db.prepare(`SELECT u.email, u.nombre doctor, s.nombre servicio, co.nombre consultorio,
+      co.marca_nombre, p.nombres paciente
+    FROM citas c
+    JOIN pacientes p ON p.id=c.paciente_id AND p.consultorio_id=c.consultorio_id
+    JOIN usuarios u ON u.id=c.doctor_id AND u.consultorio_id=c.consultorio_id
+    JOIN servicios s ON s.id=c.servicio_id AND s.consultorio_id=c.consultorio_id
+    JOIN consultorios co ON co.id=c.consultorio_id
+    WHERE c.id=? AND c.consultorio_id=?`).get(appointmentId, tenant(req));
+  if (doctorForEmail?.email) {
+    void sendClinicEmail({
+      consultorioId: tenant(req),
+      to: doctorForEmail.email,
+      patientName: doctorForEmail.doctor,
+      subject: `Cita cancelada - ${doctorForEmail.marca_nombre || doctorForEmail.consultorio}`,
+      heading: 'Un paciente canceló una cita',
+      lines: [
+        `Paciente: ${doctorForEmail.paciente}`,
+        `Servicio: ${doctorForEmail.servicio}`,
+        `Motivo: ${reason || 'Sin motivo indicado'}`,
+        under24Hours ? 'La cancelación ocurrió con menos de 24 horas de anticipación.' : null
+      ].filter(Boolean),
+      tipo: 'cancelacion_doctor'
+    }).catch(() => {});
+  }
   res.json({ mensaje: 'Cita cancelada correctamente' });
 });
 router.patch('/citas/:id/estado', allowRoles('doctor', 'operativo'), (req, res) => {
@@ -1178,6 +1308,34 @@ router.post('/pagos', upload.single('evidencia'), (req, res, next) => {
       VALUES (?,?,'pago_actualizado','Pago registrado',?,'pago',?)`).run(tenant(req), patientUser.usuario_id,
       state === 'valido' ? 'El consultorio registró tu pago y tu saldo fue actualizado.' : 'Tu comprobante QR fue enviado para verificación.', result.lastInsertRowid);
     log(req, 'crear', 'pago', result.lastInsertRowid, { paciente_id: patientId, monto_bs: req.body.monto_bs, metodo: req.body.metodo, estado: state }, patientId);
+    if (state === 'por_verificar') {
+      const doctorForMail = db.prepare(`SELECT u.email, u.nombre doctor, p.nombres paciente, co.nombre consultorio, co.marca_nombre
+        FROM pagos pg JOIN pacientes p ON p.id=pg.paciente_id AND p.consultorio_id=pg.consultorio_id
+        JOIN usuarios u ON u.id=p.usuario_id AND u.consultorio_id=p.consultorio_id
+        JOIN consultorios co ON co.id=pg.consultorio_id
+        WHERE pg.id=? AND pg.consultorio_id=? AND p.usuario_id IS NOT NULL`).get(result.lastInsertRowid, tenant(req));
+      const fallbackDoctors = doctorForMail ? [] : db.prepare(`SELECT u.email, u.nombre doctor
+        FROM usuarios u WHERE u.consultorio_id=? AND u.rol='doctor' AND u.estado='activo' AND u.eliminado_en IS NULL LIMIT 1`)
+        .all(tenant(req));
+      const recipient = doctorForMail || fallbackDoctors[0];
+      if (recipient?.email) {
+        void sendClinicEmail({
+          consultorioId: tenant(req),
+          to: recipient.email,
+          patientName: recipient.doctor,
+          subject: `Pago QR por verificar - ${recipient.marca_nombre || recipient.consultorio}`,
+          heading: 'Un paciente reportó un pago QR',
+          lines: [
+            `Paciente: ${recipient.paciente}`,
+            `Monto: Bs ${new Intl.NumberFormat('es-BO', { maximumFractionDigits: 2 }).format(req.body.monto_bs)}`,
+            'Ingresa a Cobros para validar o anular el comprobante.'
+          ],
+          actionUrl: `${config.clientUrl}/cobros`,
+          actionLabel: 'Revisar pagos',
+          tipo: 'pago_qr_reportado'
+        }).catch(() => {});
+      }
+    }
     res.status(201).json({ mensaje: state === 'por_verificar' ? 'Pago QR enviado para verificación' : 'Pago registrado correctamente', id: result.lastInsertRowid, estado: state });
   } catch (error) {
     if (req.file) fs.unlink(req.file.path, () => {});
@@ -1208,6 +1366,27 @@ router.patch('/pagos/:id/verificacion', allowRoles('doctor'), (req, res) => {
     VALUES (?,?,'pago_actualizado','Pago QR actualizado',?,'pago',?)`).run(tenant(req), patientUser.usuario_id,
     req.body.estado === 'valido' ? 'Tu pago QR fue validado y tu saldo fue actualizado.' : 'Tu pago QR fue anulado.', paymentId);
   log(req, 'verificar', 'pago', paymentId, { estado: req.body.estado }, payment.paciente_id);
+  const patientForMail = db.prepare(`SELECT p.nombres paciente, p.email, pg.monto_bs, co.nombre consultorio, co.marca_nombre
+    FROM pagos pg JOIN pacientes p ON p.id=pg.paciente_id AND p.consultorio_id=pg.consultorio_id
+    JOIN consultorios co ON co.id=pg.consultorio_id
+    WHERE pg.id=? AND pg.consultorio_id=?`).get(paymentId, tenant(req));
+  if (patientForMail?.email) {
+    const validado = req.body.estado === 'valido';
+    void sendClinicEmail({
+      consultorioId: tenant(req),
+      to: patientForMail.email,
+      patientName: patientForMail.paciente,
+      subject: `${validado ? 'Pago QR validado' : 'Pago QR anulado'} - ${patientForMail.marca_nombre || patientForMail.consultorio}`,
+      heading: validado ? 'Tu pago fue validado' : 'Tu pago QR fue anulado',
+      lines: [
+        `Monto: Bs ${new Intl.NumberFormat('es-BO', { maximumFractionDigits: 2 }).format(patientForMail.monto_bs)}`,
+        validado ? 'El consultorio confirmó tu pago y actualizó tu saldo.' : 'Si crees que es un error, contacta al consultorio.'
+      ],
+      actionUrl: `${config.clientUrl}/pagos`,
+      actionLabel: 'Ver mis pagos',
+      tipo: validado ? 'pago_validado' : 'pago_anulado'
+    }).catch(() => {});
+  }
   res.json({ mensaje: req.body.estado === 'valido' ? 'Pago QR validado correctamente' : 'Pago QR anulado correctamente' });
 });
 router.delete('/pagos/:id', allowRoles('doctor'), (req, res) => {

@@ -242,6 +242,35 @@ CREATE TABLE IF NOT EXISTS admin_auditoria (
   creado_en TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
+CREATE TABLE IF NOT EXISTS consultorio_email (
+  consultorio_id INTEGER PRIMARY KEY REFERENCES consultorios(id),
+  modo TEXT NOT NULL DEFAULT 'global' CHECK (modo IN ('global','propio')),
+  smtp_host TEXT,
+  smtp_port INTEGER,
+  smtp_secure INTEGER NOT NULL DEFAULT 0,
+  smtp_user TEXT,
+  smtp_pass_cifrado TEXT,
+  smtp_from TEXT,
+  activo INTEGER NOT NULL DEFAULT 1,
+  verificado_en TEXT,
+  ultimo_error TEXT,
+  creado_en TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  actualizado_en TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS envios_notificacion (
+  id INTEGER PRIMARY KEY,
+  consultorio_id INTEGER NOT NULL REFERENCES consultorios(id),
+  cita_id INTEGER REFERENCES citas(id) ON DELETE SET NULL,
+  destinatario TEXT NOT NULL,
+  tipo TEXT NOT NULL,
+  canal TEXT NOT NULL DEFAULT 'email',
+  estado TEXT NOT NULL CHECK (estado IN ('enviado','error')),
+  error TEXT,
+  intentos INTEGER NOT NULL DEFAULT 1,
+  creado_en TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
 CREATE INDEX IF NOT EXISTS idx_usuarios_consultorio ON usuarios(consultorio_id, eliminado_en);
 CREATE INDEX IF NOT EXISTS idx_pacientes_consultorio ON pacientes(consultorio_id, eliminado_en);
 CREATE INDEX IF NOT EXISTS idx_citas_agenda ON citas(consultorio_id, doctor_id, inicio, eliminado_en);
@@ -249,4 +278,5 @@ CREATE INDEX IF NOT EXISTS idx_pagos_paciente ON pagos(consultorio_id, paciente_
 CREATE INDEX IF NOT EXISTS idx_notificaciones_usuario ON notificaciones(consultorio_id, usuario_id, leida_en, eliminado_en);
 CREATE INDEX IF NOT EXISTS idx_notas_paciente ON notas_paciente(consultorio_id, paciente_id, eliminado_en, creado_en);
 CREATE INDEX IF NOT EXISTS idx_presupuestos_consultorio ON presupuestos(consultorio_id, paciente_id, estado, eliminado_en, creado_en);
+CREATE INDEX IF NOT EXISTS idx_envios_notificacion_consultorio ON envios_notificacion(consultorio_id, tipo, creado_en);
 CREATE INDEX IF NOT EXISTS idx_presupuesto_items_quote ON presupuesto_items(presupuesto_id, eliminado_en);

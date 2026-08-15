@@ -14,6 +14,17 @@ db.pragma('busy_timeout = 5000');
 if (databaseExisted) await backupBeforeTenantBrandingMigration();
 db.exec(fs.readFileSync(path.join(import.meta.dirname, 'schema.sql'), 'utf8'));
 
+function ensureEnviosFkSoftDelete() {
+  const exists = db.prepare(`SELECT 1 FROM sqlite_master WHERE type='table' AND name='envios_notificacion'`).get();
+  if (!exists) return;
+  const fks = db.prepare('PRAGMA foreign_key_list(envios_notificacion)').all();
+  const citaFk = fks.find((fk) => fk.from === 'cita_id');
+  if (citaFk && citaFk.on_delete === 'SET NULL') return;
+  db.exec('DROP TABLE IF EXISTS envios_notificacion');
+}
+
+ensureEnviosFkSoftDelete();
+
 function ensureColumn(table, column, definition) {
   const columns = db.prepare(`PRAGMA table_info(${table})`).all();
   if (!columns.some((item) => item.name === column)) db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);

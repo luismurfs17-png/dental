@@ -6,6 +6,7 @@ import { authenticate, requireAdmin } from '../auth.js';
 import { config } from '../config.js';
 import { db } from '../db.js';
 import { ApiError, asyncRoute, required } from '../http.js';
+import { sendPlatformEmail } from '../email.js';
 import { createSnapshot } from '../backup.js';
 
 const require = createRequire(import.meta.url);
@@ -217,6 +218,7 @@ router.post('/consultorios/:id/reiniciar', asyncRoute(async (req, res) => {
       notas: del('DELETE FROM notas_paciente WHERE consultorio_id = ?'),
       registros: del('DELETE FROM registros_clinicos WHERE consultorio_id = ?'),
       recordatorios: del('DELETE FROM email_recordatorios WHERE consultorio_id = ?'),
+      envios: del('DELETE FROM envios_notificacion WHERE consultorio_id = ?'),
       notificaciones: del('DELETE FROM notificaciones WHERE consultorio_id = ?'),
       citas: del('DELETE FROM citas WHERE consultorio_id = ?'),
       auditoria: del('DELETE FROM auditoria WHERE consultorio_id = ?'),
@@ -279,12 +281,36 @@ router.post('/invitaciones', asyncRoute(async (req, res) => {
     if (existing.consultorio_id) throw new ApiError(409, 'El correo ya forma parte de un consultorio');
     db.prepare(`UPDATE usuarios SET estado = 'preautorizado', actualizado_en = CURRENT_TIMESTAMP WHERE id = ?`).run(existing.id);
     adminLog(req.user, 'invitar', 'usuario', existing.id, { email, renovada: true }, req.ip);
+    void sendPlatformEmail({
+      to: email,
+      name: req.body.nombre || email,
+      subject: 'Tu consultorio te espera en Sonrident',
+      heading: 'Fuiste invitado a crear tu consultorio',
+      lines: [
+        'Un administrador de Sonrident te invitó a crear tu propio consultorio digital.',
+        'Entra con tu cuenta de Google usando este correo y sigue los pasos de bienvenida.'
+      ],
+      actionUrl: config.clientUrl,
+      actionLabel: 'Crear mi consultorio'
+    }).catch(() => {});
     return res.json({ mensaje: 'Invitación renovada; el correo podrá crear su consultorio', id: existing.id });
   }
   const nombre = String(req.body.nombre || '').trim() || email;
   const result = db.prepare(`INSERT INTO usuarios (email, nombre, rol, estado) VALUES (?, ?, 'doctor', 'preautorizado')`)
     .run(email, nombre);
   adminLog(req.user, 'invitar', 'usuario', result.lastInsertRowid, { email }, req.ip);
+  void sendPlatformEmail({
+    to: email,
+    name: nombre,
+    subject: 'Tu consultorio te espera en Sonrident',
+    heading: 'Fuiste invitado a crear tu consultorio',
+    lines: [
+      'Un administrador de Sonrident te invitó a crear tu propio consultorio digital.',
+      'Entra con tu cuenta de Google usando este correo y sigue los pasos de bienvenida.'
+    ],
+    actionUrl: config.clientUrl,
+    actionLabel: 'Crear mi consultorio'
+  }).catch(() => {});
   res.status(201).json({ mensaje: 'Invitación registrada; el correo podrá crear su consultorio', id: Number(result.lastInsertRowid) });
 }));
 
