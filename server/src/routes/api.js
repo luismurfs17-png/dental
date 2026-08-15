@@ -145,6 +145,11 @@ const hexColor = (value, label) => {
   if (!/^#[0-9a-f]{6}$/.test(normalized)) throw new ApiError(400, `${label} debe ser un color hexadecimal válido`);
   return normalized;
 };
+const normalizeSender = (from, user) => {
+  if (!from) return null;
+  if (from.includes('<') && from.includes('>')) return from;
+  return `${from.replace(/[<>]/g, '').trim()} <${user}>`;
+};
 const colorLuminance = (hex) => {
   const channels = [1, 3, 5].map((start) => {
     const channel = Number.parseInt(hex.slice(start, start + 2), 16) / 255;
@@ -321,7 +326,7 @@ router.put('/correo/configuracion', allowRoles('doctor'), (req, res) => {
       .run(consultorioId, String(req.body.smtp_host || 'smtp.gmail.com').trim(),
         port, req.body.smtp_secure === true ? 1 : 0,
         String(req.body.smtp_user).trim(), pass ? encryptSecret(pass) : existing.smtp_pass_cifrado,
-        String(req.body.smtp_from || '').trim() || null);
+        normalizeSender(String(req.body.smtp_from || '').trim(), String(req.body.smtp_user).trim()));
     clearClinicTransporter(consultorioId);
     log(req, 'configurar_correo', 'consultorio', consultorioId, { modo: 'propio' });
   } else {
