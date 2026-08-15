@@ -150,6 +150,23 @@ const normalizeSender = (from, user) => {
   if (from.includes('<') && from.includes('>')) return from;
   return `${from.replace(/[<>]/g, '').trim()} <${user}>`;
 };
+const SMTP_PROVIDERS = {
+  gmail: { host: 'smtp.gmail.com', port: 587, secure: 0 },
+  googlemail: { host: 'smtp.gmail.com', port: 587, secure: 0 },
+  hotmail: { host: 'smtp-mail.outlook.com', port: 587, secure: 0 },
+  outlook: { host: 'smtp-mail.outlook.com', port: 587, secure: 0 },
+  live: { host: 'smtp-mail.outlook.com', port: 587, secure: 0 },
+  msn: { host: 'smtp-mail.outlook.com', port: 587, secure: 0 },
+  yahoo: { host: 'smtp.mail.yahoo.com', port: 465, secure: 1 },
+  icloud: { host: 'smtp.mail.me.com', port: 587, secure: 0 },
+  me: { host: 'smtp.mail.me.com', port: 587, secure: 0 },
+  zoho: { host: 'smtp.zoho.com', port: 465, secure: 1 },
+  aol: { host: 'smtp.aol.com', port: 587, secure: 0 }
+};
+const smtpDefaultsFor = (email) => {
+  const domain = String(email || '').split('@')[1]?.trim().toLowerCase() || '';
+  return SMTP_PROVIDERS[domain.split('.')[0]] || null;
+};
 const colorLuminance = (hex) => {
   const channels = [1, 3, 5].map((start) => {
     const channel = Number.parseInt(hex.slice(start, start + 2), 16) / 255;
@@ -306,7 +323,9 @@ router.put('/correo/configuracion', allowRoles('doctor'), (req, res) => {
     if (!req.body.smtp_user) {
       throw new ApiError(400, 'Para usar el correo propio debe indicar el usuario SMTP');
     }
-    const port = Number(req.body.smtp_port || 587);
+    const userEmail = String(req.body.smtp_user).trim();
+    const defaults = smtpDefaultsFor(userEmail);
+    const port = defaults ? defaults.port : Number(req.body.smtp_port || 587);
     if (!Number.isInteger(port) || port < 1 || port > 65535) {
       throw new ApiError(400, 'El puerto SMTP es inválido');
     }
@@ -323,10 +342,10 @@ router.put('/correo/configuracion', allowRoles('doctor'), (req, res) => {
         modo='propio', smtp_host=excluded.smtp_host, smtp_port=excluded.smtp_port, smtp_secure=excluded.smtp_secure,
         smtp_user=excluded.smtp_user, smtp_pass_cifrado=excluded.smtp_pass_cifrado, smtp_from=excluded.smtp_from,
         activo=1, ultimo_error=NULL, verificado_en=NULL, actualizado_en=CURRENT_TIMESTAMP`)
-      .run(consultorioId, String(req.body.smtp_host || 'smtp.gmail.com').trim(),
-        port, req.body.smtp_secure === true ? 1 : 0,
-        String(req.body.smtp_user).trim(), pass ? encryptSecret(pass) : existing.smtp_pass_cifrado,
-        normalizeSender(String(req.body.smtp_from || '').trim(), String(req.body.smtp_user).trim()));
+      .run(consultorioId, defaults ? defaults.host : String(req.body.smtp_host || 'smtp.gmail.com').trim(),
+        port, defaults ? defaults.secure : (req.body.smtp_secure === true ? 1 : 0),
+        userEmail, pass ? encryptSecret(pass) : existing.smtp_pass_cifrado,
+        normalizeSender(String(req.body.smtp_from || '').trim(), userEmail));
     clearClinicTransporter(consultorioId);
     log(req, 'configurar_correo', 'consultorio', consultorioId, { modo: 'propio' });
   } else {
