@@ -30,7 +30,16 @@ export function startReminders() {
         AND er.destinatario = p.email AND er.estado = 'enviado'
       WHERE c.estado = 'confirmada' AND c.eliminado_en IS NULL AND p.eliminado_en IS NULL
         AND p.email IS NOT NULL AND p.recordatorios_activos = 1 AND er.id IS NULL
-        AND datetime(c.inicio) BETWEEN datetime('now') AND datetime('now', ?)`)
+        AND datetime(c.inicio) > datetime('now')
+        AND (
+          (co.recordatorio_horas IS NULL AND datetime('now') >= CASE
+            WHEN strftime('%H', c.inicio) >= '12' THEN datetime(date(c.inicio) || ' 08:00:00')
+            ELSE datetime(date(c.inicio, '-1 day') || ' 20:00:00')
+          END)
+          OR
+          (co.recordatorio_horas IS NOT NULL
+            AND datetime(c.inicio) <= datetime('now', '+' || co.recordatorio_horas || ' hours'))
+        )`)
       .all(`+${config.smtp.hours} hours`);
     for (const row of rows) {
       try {

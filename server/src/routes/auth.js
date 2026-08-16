@@ -245,7 +245,7 @@ router.get('/google/gmail/callback', (req, res) => {
       if (!consultorioId || consultorioId !== req.user.consultorio_id) {
         throw new ApiError(403, 'La solicitud no corresponde a su consultorio');
       }
-      const clinic = db.prepare(`SELECT slug FROM consultorios WHERE id=? AND eliminado_en IS NULL`).get(consultorioId);
+      const clinic = db.prepare(`SELECT slug, marca_nombre, nombre FROM consultorios WHERE id=? AND eliminado_en IS NULL`).get(consultorioId);
       if (!clinic) throw new ApiError(404, 'Consultorio no encontrado');
       const settingsPath = clinic.slug ? `/c/${clinic.slug}/configuracion` : '/configuracion';
 
@@ -264,19 +264,21 @@ router.get('/google/gmail/callback', (req, res) => {
       const refreshToken = encryptSecret(tokens.refresh_token);
       const accessToken = tokens.access_token ? encryptSecret(tokens.access_token) : null;
       const expiresAt = tokens.expiry_date ? new Date(tokens.expiry_date).toISOString() : null;
+      const clinicFrom = `${(clinic.marca_nombre || clinic.nombre || 'Clínica').trim()} <${gmailEmail}>`;
       db.prepare(`INSERT INTO consultorio_email
         (consultorio_id, modo, smtp_user, smtp_pass_cifrado, oauth_provider, gmail_user,
          gmail_refresh_token_cifrado, gmail_access_token_cifrado, gmail_access_token_expira_en,
-         activo, verificado_en, ultimo_error, actualizado_en)
-        VALUES (?, 'propio', ?, NULL, 'gmail_oauth', ?, ?, ?, ?, 1, CURRENT_TIMESTAMP, NULL, CURRENT_TIMESTAMP)
+         smtp_from, activo, verificado_en, ultimo_error, actualizado_en)
+        VALUES (?, 'propio', ?, NULL, 'gmail_oauth', ?, ?, ?, ?, ?, 1, CURRENT_TIMESTAMP, NULL, CURRENT_TIMESTAMP)
         ON CONFLICT(consultorio_id) DO UPDATE SET
           modo='propio', smtp_user=excluded.smtp_user, smtp_pass_cifrado=NULL,
           oauth_provider='gmail_oauth', gmail_user=excluded.gmail_user,
           gmail_refresh_token_cifrado=excluded.gmail_refresh_token_cifrado,
           gmail_access_token_cifrado=excluded.gmail_access_token_cifrado,
           gmail_access_token_expira_en=excluded.gmail_access_token_expira_en,
+          smtp_from=excluded.smtp_from,
           activo=1, verificado_en=CURRENT_TIMESTAMP, ultimo_error=NULL, actualizado_en=CURRENT_TIMESTAMP`)
-        .run(consultorioId, gmailEmail, gmailEmail, refreshToken, accessToken, expiresAt);
+        .run(consultorioId, gmailEmail, gmailEmail, refreshToken, accessToken, expiresAt, clinicFrom);
       clearClinicTransporter(consultorioId);
       console.log(`Gmail OAuth OK: consultorio=${consultorioId}, cuenta=${gmailEmail}`);
       return res.redirect(303, `${config.clientUrl}${settingsPath}?correo=conectado`);

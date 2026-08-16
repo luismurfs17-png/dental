@@ -79,6 +79,7 @@ ensureColumn('consultorio_email', 'gmail_user', 'TEXT');
 ensureColumn('consultorio_email', 'gmail_refresh_token_cifrado', 'TEXT');
 ensureColumn('consultorio_email', 'gmail_access_token_cifrado', 'TEXT');
 ensureColumn('consultorio_email', 'gmail_access_token_expira_en', 'TEXT');
+ensureColumn('consultorios', 'recordatorio_horas', 'INTEGER');
 db.exec('DROP INDEX IF EXISTS uq_consultorios_slug');
 backfillClinicSlugs();
 db.exec('CREATE UNIQUE INDEX IF NOT EXISTS uq_consultorios_slug ON consultorios(slug COLLATE NOCASE) WHERE slug IS NOT NULL');

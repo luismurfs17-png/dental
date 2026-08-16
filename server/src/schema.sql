@@ -17,6 +17,7 @@ CREATE TABLE IF NOT EXISTS consultorios (
   color_acento TEXT NOT NULL DEFAULT '#6672bd',
   color_fondo TEXT NOT NULL DEFAULT '#f3fafc',
   fondo_opacidad INTEGER NOT NULL DEFAULT 18 CHECK (fondo_opacidad BETWEEN 0 AND 45),
+  recordatorio_horas INTEGER,
   logo_path TEXT,
   fondo_path TEXT,
   creado_en TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,

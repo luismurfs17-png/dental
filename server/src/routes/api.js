@@ -220,6 +220,12 @@ router.patch('/consultorio', allowRoles('doctor'), async (req, res) => {
   if (req.body.modo_cobro !== undefined && !['app', 'definir', 'mixto'].includes(req.body.modo_cobro)) {
     throw new ApiError(400, 'Modo de cobro inválido');
   }
+  if (req.body.recordatorio_horas !== undefined) {
+    const hours = req.body.recordatorio_horas === null ? null : Number(req.body.recordatorio_horas);
+    if (hours !== null && (!Number.isInteger(hours) || hours < 1 || hours > 72)) {
+      throw new ApiError(400, 'Las horas del recordatorio deben estar entre 1 y 72');
+    }
+  }
   const requestedBrandName = req.body.marca_nombre === undefined ? null : String(req.body.marca_nombre || '').trim();
   if (requestedBrandName && requestedBrandName.length > 60) {
     throw new ApiError(400, 'El nombre de marca no puede superar 60 caracteres');
@@ -252,14 +258,18 @@ router.patch('/consultorio', allowRoles('doctor'), async (req, res) => {
   const primaryChanged = primary !== current.color_primario;
   const fields = ['nombre', 'nit', 'telefono', 'email', 'direccion', 'zona_horaria', 'modo_cobro'];
   const values = fields.map((field) => req.body[field] ?? current[field]);
+  const reminderHours = req.body.recordatorio_horas === undefined
+    ? current.recordatorio_horas ?? null
+    : (req.body.recordatorio_horas === null ? null : Number(req.body.recordatorio_horas));
   if (primaryChanged) {
     try { await createClinicIcons({ ...current, color_primario: primary }); }
     catch { throw new ApiError(400, 'No se pudo actualizar el color con el logo actual'); }
   }
   db.transaction(() => {
     db.prepare(`UPDATE consultorios SET nombre=?, nit=?, telefono=?, email=?, direccion=?, zona_horaria=?, modo_cobro=?,
-        marca_nombre=?, color_primario=?, color_acento=?, color_fondo=?, fondo_opacidad=?, actualizado_en=CURRENT_TIMESTAMP WHERE id=?`)
-      .run(...values, brandName, primary, accent, background, backgroundOpacity, tenant(req));
+        marca_nombre=?, color_primario=?, color_acento=?, color_fondo=?, fondo_opacidad=?, recordatorio_horas=?,
+        actualizado_en=CURRENT_TIMESTAMP WHERE id=?`)
+      .run(...values, brandName, primary, accent, background, backgroundOpacity, reminderHours, tenant(req));
     log(req, 'actualizar', 'consultorio', tenant(req), req.body);
   })();
   const updated = db.prepare('SELECT * FROM consultorios WHERE id=?').get(tenant(req));

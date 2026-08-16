@@ -200,6 +200,15 @@ test('modo de cobro: por la app exige precio, definir lo libera, y el dashboard 
     await doctor.patch('/api/consultorio').send({ modo_cobro: previousMode }).expect(200);
   }
 
+  await doctor.patch('/api/consultorio').send({ recordatorio_horas: 4 }).expect(200);
+  let withHours = await doctor.get('/api/consultorio').expect(200);
+  assert.equal(withHours.body.consultorio.recordatorio_horas, 4);
+  await doctor.patch('/api/consultorio').send({ recordatorio_horas: null }).expect(200);
+  withHours = await doctor.get('/api/consultorio').expect(200);
+  assert.equal(withHours.body.consultorio.recordatorio_horas, null);
+  await doctor.patch('/api/consultorio').send({ recordatorio_horas: 0 }).expect(400);
+  await doctor.patch('/api/consultorio').send({ recordatorio_horas: 999 }).expect(400);
+
   const date = new Date(Date.now() + 2 * 86400000).toISOString().slice(0, 10);
   const weekday = new Date(`${date}T12:00:00Z`).getUTCDay();
   db.prepare(`INSERT OR IGNORE INTO horarios (consultorio_id,usuario_id,dia_semana,hora_inicio,hora_fin) VALUES (?,?,?,'09:00','10:00')`).run(fixture.clinicId, fixture.doctorId, weekday);
