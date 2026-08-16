@@ -213,7 +213,7 @@ router.get('/google/gmail', authenticate, (req, res, next) => {
     setOAuthState(res, state);
     res.redirect(gmailGoogle.generateAuthUrl({
       access_type: 'offline',
-      scope: [GMAIL_SCOPE],
+      scope: ['openid', 'email', GMAIL_SCOPE],
       prompt: 'consent',
       login_hint: req.user.email,
       state
