@@ -289,13 +289,14 @@ router.get('/consultorio/qr', (req, res) => {
 });
 
 function emailConfigJson(consultorioId) {
-  const row = db.prepare(`SELECT modo, smtp_host, smtp_port, smtp_secure, smtp_user, smtp_from,
-      activo, verificado_en, ultimo_error
+  const row = db.prepare(`SELECT modo, oauth_provider, smtp_host, smtp_port, smtp_secure, smtp_user,
+      smtp_from, gmail_user, activo, verificado_en, ultimo_error
     FROM consultorio_email WHERE consultorio_id = ?`).get(consultorioId);
   const clinic = db.prepare(`SELECT email FROM consultorios WHERE id=? AND eliminado_en IS NULL`).get(consultorioId);
+  const oauthConectado = row?.oauth_provider === 'gmail_oauth';
   return {
     configurado: Boolean(row),
-    modo: row?.modo || 'global',
+    modo: oauthConectado ? 'propio' : (row?.modo || 'global'),
     smtp_host: row?.smtp_host || null,
     smtp_port: row?.smtp_port || null,
     smtp_secure: Boolean(row?.smtp_secure),
@@ -304,6 +305,9 @@ function emailConfigJson(consultorioId) {
     activo: row?.activo ?? 1,
     verificado_en: row?.verificado_en || null,
     ultimo_error: row?.ultimo_error || null,
+    oauth_conectado: oauthConectado,
+    oauth_email: oauthConectado ? (row?.gmail_user || null) : null,
+    gmail_disponible: Boolean(config.google.clientId && config.google.clientSecret),
     global_activo: Boolean(config.smtp.host && config.smtp.user && config.smtp.pass),
     global_remitente: config.smtp.from || null,
     correo_consultorio: clinic?.email || null
@@ -341,6 +345,8 @@ router.put('/correo/configuracion', allowRoles('doctor'), (req, res) => {
       ON CONFLICT(consultorio_id) DO UPDATE SET
         modo='propio', smtp_host=excluded.smtp_host, smtp_port=excluded.smtp_port, smtp_secure=excluded.smtp_secure,
         smtp_user=excluded.smtp_user, smtp_pass_cifrado=excluded.smtp_pass_cifrado, smtp_from=excluded.smtp_from,
+        oauth_provider='smtp', gmail_user=NULL, gmail_refresh_token_cifrado=NULL,
+        gmail_access_token_cifrado=NULL, gmail_access_token_expira_en=NULL,
         activo=1, ultimo_error=NULL, verificado_en=NULL, actualizado_en=CURRENT_TIMESTAMP`)
       .run(consultorioId, defaults ? defaults.host : String(req.body.smtp_host || 'smtp.gmail.com').trim(),
         port, defaults ? defaults.secure : (req.body.smtp_secure === true ? 1 : 0),
@@ -352,12 +358,28 @@ router.put('/correo/configuracion', allowRoles('doctor'), (req, res) => {
     db.prepare(`INSERT INTO consultorio_email (consultorio_id, modo, activo, ultimo_error, actualizado_en)
       VALUES (?, 'global', 1, NULL, CURRENT_TIMESTAMP)
       ON CONFLICT(consultorio_id) DO UPDATE SET modo='global', smtp_user=NULL, smtp_pass_cifrado=NULL,
+        oauth_provider='smtp', gmail_user=NULL, gmail_refresh_token_cifrado=NULL,
+        gmail_access_token_cifrado=NULL, gmail_access_token_expira_en=NULL,
         activo=1, ultimo_error=NULL, verificado_en=NULL, actualizado_en=CURRENT_TIMESTAMP`)
       .run(consultorioId);
     clearClinicTransporter(consultorioId);
     log(req, 'configurar_correo', 'consultorio', consultorioId, { modo: 'global' });
   }
   res.json({ mensaje: 'Configuración de correo actualizada', configuracion: emailConfigJson(consultorioId) });
+});
+
+router.post('/correo/gmail/desconectar', allowRoles('doctor'), (req, res) => {
+  const consultorioId = tenant(req);
+  db.prepare(`INSERT INTO consultorio_email (consultorio_id, modo, activo, ultimo_error, actualizado_en)
+    VALUES (?, 'global', 1, NULL, CURRENT_TIMESTAMP)
+    ON CONFLICT(consultorio_id) DO UPDATE SET modo='global', smtp_user=NULL, smtp_pass_cifrado=NULL,
+      oauth_provider='smtp', gmail_user=NULL, gmail_refresh_token_cifrado=NULL,
+      gmail_access_token_cifrado=NULL, gmail_access_token_expira_en=NULL,
+      activo=1, ultimo_error=NULL, verificado_en=NULL, actualizado_en=CURRENT_TIMESTAMP`)
+    .run(consultorioId);
+  clearClinicTransporter(consultorioId);
+  log(req, 'desconectar_correo', 'consultorio', consultorioId, { proveedor: 'gmail' });
+  res.json({ mensaje: 'Correo de Google desconectado', configuracion: emailConfigJson(consultorioId) });
 });
 
 router.post('/correo/probar', allowRoles('doctor'), asyncRoute(async (req, res) => {

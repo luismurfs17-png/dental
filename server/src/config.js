@@ -15,7 +15,8 @@ export const config = {
   google: {
     clientId: process.env.GOOGLE_CLIENT_ID || '',
     clientSecret: process.env.GOOGLE_CLIENT_SECRET || '',
-    callbackUrl: process.env.GOOGLE_CALLBACK_URL || 'http://localhost:3000/api/auth/google/callback'
+    callbackUrl: process.env.GOOGLE_CALLBACK_URL || 'http://localhost:3000/api/auth/google/callback',
+    gmailCallbackUrl: process.env.GOOGLE_GMAIL_CALLBACK_URL || 'http://localhost:3000/api/auth/google/gmail/callback'
   },
   smtp: {
     host: process.env.SMTP_HOST || '',

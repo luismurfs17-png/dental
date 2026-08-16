@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import { useSearchParams } from 'react-router-dom'
 import QRCode from 'qrcode'
 import { api, unwrap } from '../../lib/api.js'
 import { useRemote } from '../../hooks/useRemote.js'
@@ -13,27 +14,9 @@ const weekdays = [
   { dia_semana: 0, dia: 'domingo' },
 ]
 
-const SMTP_PROVIDERS = {
-  gmail: { host: 'smtp.gmail.com', port: 587, secure: false },
-  googlemail: { host: 'smtp.gmail.com', port: 587, secure: false },
-  hotmail: { host: 'smtp-mail.outlook.com', port: 587, secure: false },
-  outlook: { host: 'smtp-mail.outlook.com', port: 587, secure: false },
-  live: { host: 'smtp-mail.outlook.com', port: 587, secure: false },
-  msn: { host: 'smtp-mail.outlook.com', port: 587, secure: false },
-  yahoo: { host: 'smtp.mail.yahoo.com', port: 465, secure: true },
-  icloud: { host: 'smtp.mail.me.com', port: 587, secure: false },
-  me: { host: 'smtp.mail.me.com', port: 587, secure: false },
-  zoho: { host: 'smtp.zoho.com', port: 465, secure: true },
-  aol: { host: 'smtp.aol.com', port: 587, secure: false },
-}
-
-function smtpDefaultsFor(email) {
-  const domain = String(email || '').split('@')[1]?.trim().toLowerCase() || ''
-  return SMTP_PROVIDERS[domain.split('.')[0]] || null
-}
-
 export default function Settings() {
   const { user, setUser } = useAuth()
+  const [searchParams, setSearchParams] = useSearchParams()
   const clinicRemote = useRemote('/consultorio')
   const hoursRemote = useRemote('/horarios')
   const usersRemote = useRemote('/usuarios')
@@ -47,7 +30,7 @@ export default function Settings() {
   const [saving, setSaving] = useState(false)
   const [message, setMessage] = useState('')
   const [portalQr, setPortalQr] = useState('')
-  const [emailForm, setEmailForm] = useState({ modo: 'global', smtp_host: 'smtp.gmail.com', smtp_port: 587, smtp_secure: false, smtp_user: '', smtp_pass: '', smtp_from: '', correo_prueba: '' })
+  const [emailForm, setEmailForm] = useState({ modo: 'global', correo_prueba: '' })
   const [envios, setEnvios] = useState([])
   const [testing, setTesting] = useState(false)
   const logoPreview = useFilePreview(logoFile)
@@ -92,8 +75,17 @@ export default function Settings() {
   useEffect(() => {
     const cfg = emailRemote.data?.configuracion
     if (!cfg) return
-    setEmailForm((current) => ({ ...current, modo: cfg.modo || 'global', smtp_host: cfg.smtp_host || 'smtp.gmail.com', smtp_port: cfg.smtp_port || 587, smtp_secure: Boolean(cfg.smtp_secure), smtp_user: cfg.smtp_user || '', smtp_from: cfg.smtp_from || '' }))
+    setEmailForm((current) => ({ ...current, modo: cfg.oauth_conectado ? 'google' : 'global' }))
   }, [emailRemote.data])
+
+  useEffect(() => {
+    const state = searchParams.get('correo')
+    if (!state) return
+    if (state === 'conectado') setMessage('Correo de Google conectado correctamente.')
+    else setMessage(`No se pudo conectar el correo: ${searchParams.get('motivo') || 'vuelve a intentarlo'}`)
+    emailRemote.reload()
+    setSearchParams({}, { replace: true })
+  }, [searchParams, emailRemote.reload, setSearchParams])
 
   async function loadEnvios() {
     try { setEnvios(unwrap(await api('/correo/envios'), 'envios')) }
@@ -103,17 +95,26 @@ export default function Settings() {
   async function saveEmail(event) {
     event.preventDefault(); setSaving(true)
     try {
-      const result = await api('/correo/configuracion', { method: 'PUT', body: emailForm })
-      setEmailForm((current) => ({ ...current, smtp_pass: '' }))
+      const result = await api('/correo/configuracion', { method: 'PUT', body: { modo: emailForm.modo } })
       setMessage(result.mensaje)
-      if (emailForm.modo === 'propio') loadEnvios()
+      await emailRemote.reload()
+    } catch (error) { setMessage(error.message) } finally { setSaving(false) }
+  }
+
+  async function disconnectGmail() {
+    setSaving(true)
+    try {
+      const result = await api('/correo/gmail/desconectar', { method: 'POST' })
+      setEmailForm((current) => ({ ...current, modo: 'global' }))
+      await emailRemote.reload()
+      setMessage(result.mensaje)
     } catch (error) { setMessage(error.message) } finally { setSaving(false) }
   }
 
   async function sendTestEmail(event) {
     event.preventDefault(); setTesting(true)
     try {
-      const result = await api('/correo/probar', { method: 'POST', body: { correo: emailForm.correo_prueba || emailForm.smtp_user || '' } })
+      const result = await api('/correo/probar', { method: 'POST', body: { correo: emailForm.correo_prueba } })
       setMessage(result.mensaje)
     } catch (error) { setMessage(error.message) } finally { setTesting(false) }
   }
@@ -233,11 +234,23 @@ export default function Settings() {
     } catch (error) { setMessage(error.message) } finally { setSaving(false) }
   }
 
+  const emailCfg = emailRemote.data?.configuracion || {}
+  const oauthConectado = Boolean(emailCfg.oauth_conectado)
+  const oauthEmail = emailCfg.oauth_email || ''
+  const gmailDisponible = Boolean(emailCfg.gmail_disponible)
+  const smtpLegacy = emailCfg.modo === 'propio' && !oauthConectado
+  const statusStrong = oauthConectado ? `Correo de Google conectado (${oauthEmail})` : smtpLegacy ? 'Correo SMTP propio configurado' : 'Usando correo de la plataforma'
+  const statusSmall = oauthConectado
+    ? (emailCfg.global_activo ? 'También está disponible el correo global.' : 'Los envíos salen desde tu cuenta de Google.')
+    : smtpLegacy
+      ? 'Conecta Google para administrarlo sin contraseñas.'
+      : (emailCfg.global_activo ? 'El correo global está activo.' : 'Sin correo global: conecta Google para enviar avisos.')
+
   return <><PageHeader eyebrow="ADMINISTRACIÓN" title="Tu consultorio" description="Identidad, disponibilidad, equipo y medios de pago." /><div className="settings-grid">
     <form className="settings-card" onSubmit={(event) => saveClinic(event, ['nombre', 'telefono', 'direccion'])}><div className="settings-card-head"><span><Icon name="settings" /></span><div><h2>Información general</h2><p>Datos visibles para pacientes.</p></div></div><Field label="Nombre"><input value={clinic.nombre || ''} onChange={(e) => setClinic({ ...clinic, nombre: e.target.value })} required /></Field><Field label="Teléfono"><input value={clinic.telefono || ''} onChange={(e) => setClinic({ ...clinic, telefono: e.target.value })} /></Field><Field label="Dirección"><input value={clinic.direccion || ''} onChange={(e) => setClinic({ ...clinic, direccion: e.target.value })} /></Field><button className="button button-primary" disabled={saving}>Guardar información</button></form>
     <form className="settings-card identity-card" onSubmit={saveIdentity}><div className="settings-card-head"><span><Icon name="edit" /></span><div><h2>Identidad visual</h2><p>Tu marca para equipo y pacientes.</p></div></div><div className="identity-preview" style={previewStyle}><div className="identity-preview-brand"><span className={brand.logo ? 'has-logo' : ''}>{brand.logo ? <img src={brand.logo} alt="Vista previa del logo" /> : <Icon name="tooth" />}</span><div><strong>{brand.name}</strong><small>Tu consultorio, con identidad propia</small></div></div><i /></div><Field label="Nombre de marca" hint="Si lo dejas vacío se mostrará el nombre del consultorio."><input maxLength="60" value={clinic.marca_nombre || ''} onChange={(e) => setClinic({ ...clinic, marca_nombre: e.target.value })} placeholder={clinic.nombre || 'Nombre del consultorio'} /></Field><div className="brand-color-grid"><ColorField label="Principal" value={clinic.color_primario || DEFAULT_BRAND.primary} onChange={(value) => setClinic({ ...clinic, color_primario: value })} /><ColorField label="Acento" value={clinic.color_acento || DEFAULT_BRAND.accent} onChange={(value) => setClinic({ ...clinic, color_acento: value })} /><ColorField label="Fondo" value={clinic.color_fondo || DEFAULT_BRAND.background} onChange={(value) => setClinic({ ...clinic, color_fondo: value })} /></div><div className="identity-files"><IdentityFile label="Logo" hint="PNG, JPG o WEBP. Mejor si es cuadrado." file={logoFile} current={clinic.logo_url} onSelect={(file) => selectIdentityFile('logo', file)} onRemove={() => removeIdentityImage('logo')} disabled={saving} /><IdentityFile label="Imagen de fondo" hint="Se adapta a computadoras y celulares." file={backgroundFile} current={clinic.fondo_url} onSelect={(file) => selectIdentityFile('fondo', file)} onRemove={() => removeIdentityImage('fondo')} disabled={saving} /></div><label className="background-intensity"><span><strong>Intensidad de la imagen</strong><small>{clinic.fondo_opacidad ?? DEFAULT_BRAND.backgroundOpacity}%</small></span><input type="range" min="0" max="45" value={clinic.fondo_opacidad ?? DEFAULT_BRAND.backgroundOpacity} onChange={(e) => setClinic({ ...clinic, fondo_opacidad: Number(e.target.value) })} /></label><div className="identity-actions"><button type="button" className="button button-ghost" onClick={() => setClinic({ ...clinic, color_primario: DEFAULT_BRAND.primary, color_acento: DEFAULT_BRAND.accent, color_fondo: DEFAULT_BRAND.background, fondo_opacidad: DEFAULT_BRAND.backgroundOpacity })} disabled={saving}>Colores originales</button><button className="button button-primary" disabled={saving}>Guardar identidad</button></div></form>
     <section className="settings-card portal-app-card"><div className="settings-card-head"><span><Icon name="phone" /></span><div><h2>Aplicación de tu clínica</h2><p>Comparte un acceso instalable con tu marca.</p></div></div><div className="portal-app-layout"><div className="portal-qr-wrap"><div className="portal-qr">{portalQr ? <img src={portalQr} alt={`QR de acceso a ${brand.name}`} /> : <Icon name="qr" size={58} />}</div><button type="button" onClick={downloadPortalQr} disabled={!portalQr}>Descargar QR</button></div><div className="portal-app-info"><strong>{brand.name}</strong><p>Este enlace funciona para doctores, equipo y pacientes. Cada perfil verá únicamente sus funciones.</p><div className="portal-url"><span>{portalUrl || 'Preparando enlace...'}</span><button type="button" onClick={copyPortal} disabled={!portalUrl}>Copiar</button></div><div className="portal-app-actions"><button type="button" className="button button-ghost" onClick={sharePortal} disabled={!portalUrl}><Icon name="upload" /> Compartir</button>{clinic.app_path && <a className="button button-primary" href={`${clinic.app_path}/instalar`} target="_blank" rel="noreferrer"><Icon name="phone" /> Instalar en este teléfono</a>}</div></div></div></section>
-    <section className="settings-card email-card"><div className="settings-card-head"><span><Icon name="email" /></span><div><h2>Correos de tu clínica</h2><p>Confirmaciones, recordatorios y avisos con tu marca.</p></div></div><div className="modo-cobro-options">{[['global', 'Global', 'Usa el correo de la plataforma.'], ['propio', 'Propio', 'Usa un correo SMTP de tu clínica (ej. Gmail).']].map(([value, label, hint]) => <label key={value} className={`modo-option ${(emailForm.modo || 'global') === value ? 'selected' : ''}`}><input type="radio" name="modo_correo" value={value} checked={(emailForm.modo || 'global') === value} onChange={(e) => setEmailForm({ ...emailForm, modo: e.target.value })} /><span><strong>{label}</strong><small>{hint}</small></span></label>)}</div>{emailForm.modo === 'propio' && <><Field label="Servidor SMTP" hint="Para Gmail: smtp.gmail.com (ya viene así)."><input value={emailForm.smtp_host} onChange={(e) => setEmailForm({ ...emailForm, smtp_host: e.target.value })} placeholder="smtp.gmail.com" /></Field><Field label="Puerto" hint="Gmail usa 587. Solo cambia a 465 si activas SSL."><input type="number" value={emailForm.smtp_port} onChange={(e) => setEmailForm({ ...emailForm, smtp_port: Number(e.target.value) })} placeholder="587" /></Field><label className="mini-toggle" style={{ margin: '0 0 12px 0' }}><input type="checkbox" checked={emailForm.smtp_secure} onChange={(e) => setEmailForm({ ...emailForm, smtp_secure: e.target.checked })} /><i /><span style={{ marginLeft: 8 }}>Conexión segura (SSL)</span></label><Field label="Correo emisor (Gmail)" hint="Al escribir tu correo, el servidor se ajusta solo (Gmail, Hotmail, Yahoo…)."><input type="email" value={emailForm.smtp_user} onChange={(e) => { const value = e.target.value; const defaults = smtpDefaultsFor(value); setEmailForm({ ...emailForm, smtp_user: value, ...(defaults ? { smtp_host: defaults.host, smtp_port: defaults.port, smtp_secure: defaults.secure } : {}) }) }} placeholder="clinica@gmail.com" /></Field><Field label="Contraseña de aplicación" hint="Google → Seguridad → Contraseñas de aplicaciones (requiere 2FA)."><input type="password" value={emailForm.smtp_pass} onChange={(e) => setEmailForm({ ...emailForm, smtp_pass: e.target.value })} placeholder="Dejar vacío conserva la actual" /></Field><Field label="Remitente mostrado" hint="Opcional: el nombre que verá el paciente, ej. Clínica Sonrisa."><input value={emailForm.smtp_from} onChange={(e) => setEmailForm({ ...emailForm, smtp_from: e.target.value })} placeholder="Clínica Sonrisa" /></Field></>}<button className="button button-primary" onClick={saveEmail} disabled={saving}>Guardar configuración de correo</button><div className="email-test-row"><Field label="Enviar correo de prueba a"><input type="email" value={emailForm.correo_prueba || ''} onChange={(e) => setEmailForm({ ...emailForm, correo_prueba: e.target.value })} placeholder={emailForm.modo === 'propio' ? emailForm.smtp_user || 'destino@correo.com' : 'destino@correo.com'} /></Field><button className="button button-ghost" onClick={sendTestEmail} disabled={testing}>{testing ? 'Enviando…' : 'Probar envío'}</button></div><div className="email-status"><strong>{emailRemote.data?.configuracion?.modo === 'propio' ? 'Correo propio activo' : 'Usando correo de la plataforma'}</strong><small>{emailRemote.data?.configuracion?.global_activo ? 'El correo global está activo.' : 'Sin correo global: configura un correo propio para recibir avisos.'} {emailRemote.data?.configuracion?.ultimo_error ? `Último error: ${emailRemote.data.configuracion.ultimo_error}` : ''}</small></div><details className="email-history" open={envios.length > 0}><summary onClick={envios.length === 0 ? loadEnvios : undefined}>Historial de envíos ({envios.length})</summary><div className="email-history-list">{envios.length === 0 ? <small>Sin envíos registrados todavía.</small> : envios.map((item) => <div key={item.id}><span className={`envio-estado ${item.estado}`}>{item.estado === 'enviado' ? '✓' : '✗'}</span><div><strong>{item.tipo}</strong><small>{item.destinatario} · {item.creado_en} {item.error ? `· ${item.error}` : ''}</small></div></div>)}</div></details></section>
+    <section className="settings-card email-card"><div className="settings-card-head"><span><Icon name="email" /></span><div><h2>Correos de tu clínica</h2><p>Confirmaciones, recordatorios y avisos con tu marca.</p></div></div><div className="modo-cobro-options">{[['global', 'Global', 'Usa el correo de la plataforma.'], ['google', 'Google (recomendado)', 'Conecta el Gmail de tu clínica con un clic, sin contraseñas.']].map(([value, label, hint]) => <label key={value} className={`modo-option ${emailForm.modo === value ? 'selected' : ''}`}><input type="radio" name="modo_correo" value={value} checked={emailForm.modo === value} onChange={(e) => setEmailForm({ ...emailForm, modo: e.target.value })} /><span><strong>{label}</strong><small>{hint}</small></span></label>)}</div>{emailForm.modo === 'google' ? (oauthConectado ? <div className="gmail-connected"><span className="gmail-connected-icon"><Icon name="check" /></span><div><strong>Conectado como {oauthEmail}</strong><small>Los correos se envían desde esta cuenta con el permiso de Google.</small></div><button type="button" className="button button-ghost" onClick={disconnectGmail} disabled={saving}>Desconectar</button></div> : gmailDisponible ? <div className="gmail-connect"><p>Conecta la cuenta de Google del consultorio para enviar confirmaciones, recordatorios y avisos.</p><a className="button button-primary" href="/api/auth/google/gmail"><span className="google-g">G</span> Conectar con Gmail</a><small>Un clic: Google pedirá el permiso. No se guardan contraseñas.</small></div> : <p className="muted-box">El enlace con Google aún no está disponible en esta instalación.</p>) : <button className="button button-primary" onClick={saveEmail} disabled={saving}>Guardar configuración de correo</button>}<div className="email-test-row"><Field label="Enviar correo de prueba a"><input type="email" value={emailForm.correo_prueba || ''} onChange={(e) => setEmailForm({ ...emailForm, correo_prueba: e.target.value })} placeholder="destino@correo.com" /></Field><button className="button button-ghost" onClick={sendTestEmail} disabled={testing}>{testing ? 'Enviando…' : 'Probar envío'}</button></div><div className="email-status"><strong>{statusStrong}</strong><small>{statusSmall}{emailCfg.ultimo_error ? ` Último error: ${emailCfg.ultimo_error}` : ''}</small></div><details className="email-history" open={envios.length > 0}><summary onClick={envios.length === 0 ? loadEnvios : undefined}>Historial de envíos ({envios.length})</summary><div className="email-history-list">{envios.length === 0 ? <small>Sin envíos registrados todavía.</small> : envios.map((item) => <div key={item.id}><span className={`envio-estado ${item.estado}`}>{item.estado === 'enviado' ? '✓' : '✗'}</span><div><strong>{item.tipo}</strong><small>{item.destinatario} · {item.creado_en} {item.error ? `· ${item.error}` : ''}</small></div></div>)}</div></details></section>
     <section className="settings-card hours-card"><div className="settings-card-head"><span><Icon name="clock" /></span><div><h2>Horarios de atención</h2><p>Disponibilidad del doctor actual.</p></div></div><div className="hours-list">{hours.map((item, index) => <div key={item.dia_semana}><label className="mini-toggle"><input type="checkbox" checked={item.activo} onChange={(e) => setHours(hours.map((x, i) => i === index ? { ...x, activo: e.target.checked } : x))} /><i /></label><strong>{item.dia}</strong>{item.activo ? <><input type="time" value={item.hora_inicio} onChange={(e) => setHours(hours.map((x, i) => i === index ? { ...x, hora_inicio: e.target.value } : x))} /><span>a</span><input type="time" value={item.hora_fin} onChange={(e) => setHours(hours.map((x, i) => i === index ? { ...x, hora_fin: e.target.value } : x))} /></> : <em>Cerrado</em>}</div>)}</div><button className="button button-primary" onClick={saveHours} disabled={saving}>Guardar horarios</button></section>
     <section className="settings-card"><div className="settings-card-head"><span><Icon name="qr" /></span><div><h2>QR de pagos</h2><p>Visible para todos tus pacientes.</p></div></div><div className="qr-setting-body">{clinic.qr_url ? <img src={clinic.qr_url} alt="QR del consultorio" /> : <div className="qr-small-placeholder"><Icon name="qr" size={48} /></div>}<label className="file-button"><Icon name="upload" /><span>{qrFile?.name || 'Seleccionar imagen'}</span><input type="file" accept="image/jpeg,image/png,image/webp" onChange={(e) => setQrFile(e.target.files[0])} /></label></div><button className="button button-primary" onClick={uploadQr} disabled={saving || !qrFile}>Subir QR</button></section>
     <form className="settings-card" onSubmit={(event) => saveClinic(event, ['modo_cobro'])}><div className="settings-card-head"><span><Icon name="wallet" /></span><div><h2>Modo de cobro</h2><p>Cómo cobran tus consultas.</p></div></div><div className="modo-cobro-options">{[['app', 'Cobrar por la app', 'Todo tratamiento exige precio fijo; el paciente lo ve al reservar y el saldo queda registrado.'], ['definir', 'Todo “por definir”', 'Todas las consultas se cobran en el consultorio; el paciente reserva sin ver precios.'], ['mixto', 'Mixto (recomendado)', 'Tratamientos con precio fijo y otros “por definir”, según cada caso.']].map(([value, label, hint]) => <label key={value} className={`modo-option ${(clinic.modo_cobro || 'mixto') === value ? 'selected' : ''}`}><input type="radio" name="modo_cobro" value={value} checked={(clinic.modo_cobro || 'mixto') === value} onChange={(e) => setClinic({ ...clinic, modo_cobro: e.target.value })} /><span><strong>{label}</strong><small>{hint}</small></span></label>)}</div><button className="button button-primary" disabled={saving}>Guardar modo de cobro</button></form>

@@ -52,6 +52,7 @@ Linux y el contenedor maneja `SIGTERM` antes de cerrar SQLite.
 | `GOOGLE_CLIENT_ID` | No | Google Cloud OAuth Web Client |
 | `GOOGLE_CLIENT_SECRET` | Sí | Google Cloud OAuth |
 | `GOOGLE_CALLBACK_URL` | No | `https://DOMINIO/api/auth/google/callback` |
+| `GOOGLE_GMAIL_CALLBACK_URL` | No | `https://DOMINIO/api/auth/google/gmail/callback` |
 | `SUPERADMIN_EMAILS` | No | Correos del administrador, separados por coma |
 | `SMTP_HOST` | No | `smtp.gmail.com` al activar Gmail |
 | `SMTP_PORT` | No | `587` |
@@ -81,6 +82,24 @@ Al migrar al portal neutral usar `https://clinicas.copaapp.cloud` como origen y
 las cookies y las instalaciones PWA no se transfieren entre dominios. El dominio
 anterior puede mostrar un aviso o redirección, pero los usuarios deberán iniciar
 sesión e instalar nuevamente desde el dominio neutral.
+
+### Enlace de correo con Google (doctor)
+
+En `Tu consultorio → Correos de tu clínica` el doctor puede conectar el Gmail
+del consultorio con un clic (OAuth, sin contraseñas). Requiere:
+
+- Registrar la URI de redirección `https://DOMINIO/api/auth/google/gmail/callback`
+  en el mismo cliente OAuth de Google Cloud.
+- Incluir el scope `https://mail.google.com/` en la pantalla de consentimiento.
+  Es un alcance restringido: en modo *Testing* funciona solo con usuarios de
+  prueba; para producción con usuarios reales se requiere la verificación de la
+  aplicación en Google.
+- Variable `GOOGLE_GMAIL_CALLBACK_URL` en Dokploy.
+
+El servidor guarda únicamente el refresh token cifrado (clave derivada de
+`JWT_SECRET`) en `consultorio_email` y envía mediante SMTP OAuth2 de
+Nodemailer. El formulario SMTP manual ya no se muestra en la interfaz; el
+backend conserva el soporte para configuraciones previas.
 
 ## PWA multi-clínica
 

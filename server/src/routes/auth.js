@@ -12,10 +12,14 @@ import {
   setOAuthState,
   withAdminFlag
 } from '../auth.js';
+import { encryptSecret } from '../crypto.js';
+import { clearClinicTransporter } from '../email.js';
 import { ApiError, asyncRoute, required } from '../http.js';
 
 const router = Router();
 const google = new OAuth2Client(config.google.clientId, config.google.clientSecret, config.google.callbackUrl);
+const gmailGoogle = new OAuth2Client(config.google.clientId, config.google.clientSecret, config.google.gmailCallbackUrl);
+const GMAIL_SCOPE = 'https://mail.google.com/';
 
 function clinicLoginPath(slug) {
   return slug ? `/c/${slug}` : '/login';
@@ -196,6 +200,93 @@ router.post('/google', asyncRoute(async (req, res) => {
   issueSession(res, user);
   res.json({ mensaje: 'Sesión iniciada correctamente', usuario: user });
 }));
+
+router.get('/google/gmail', authenticate, (req, res, next) => {
+  try {
+    if (!config.google.clientId || !config.google.clientSecret) {
+      throw new ApiError(503, 'El enlace con Google no está configurado');
+    }
+    if (!req.user.consultorio_id || req.user.rol !== 'doctor') {
+      throw new ApiError(403, 'Solo el doctor puede conectar el correo del consultorio');
+    }
+    const state = `${randomBytes(24).toString('hex')}.${req.user.consultorio_id}`;
+    setOAuthState(res, state);
+    res.redirect(gmailGoogle.generateAuthUrl({
+      access_type: 'offline',
+      scope: [GMAIL_SCOPE],
+      prompt: 'consent',
+      login_hint: req.user.email,
+      state
+    }));
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.get('/google/gmail/callback', (req, res) => {
+  const redirectError = (message) => {
+    const query = new URLSearchParams({ correo: 'error', motivo: message });
+    return res.redirect(303, `${config.clientUrl}/configuracion?${query}`);
+  };
+  authenticate(req, res, (error) => {
+    if (error) return redirectError(error instanceof ApiError ? error.message : 'Debe iniciar sesión para conectar el correo');
+    const handle = async () => {
+      const receivedState = String(req.query.state || '');
+      const expectedState = readOAuthState(req);
+      clearOAuthState(res);
+      const validState = receivedState.length > 0
+        && receivedState.length === expectedState.length
+        && timingSafeEqual(Buffer.from(receivedState), Buffer.from(expectedState));
+      if (!validState) throw new ApiError(401, 'La solicitud de enlace con Google no es válida. Intente de nuevo.');
+      if (!req.query.code) {
+        throw new ApiError(400, req.query.error ? 'El enlace con Google fue cancelado' : 'Google no devolvió un código de autorización');
+      }
+      const consultorioId = Number(expectedState.split('.').slice(1).join('.')) || 0;
+      if (!consultorioId || consultorioId !== req.user.consultorio_id) {
+        throw new ApiError(403, 'La solicitud no corresponde a su consultorio');
+      }
+      const clinic = db.prepare(`SELECT slug FROM consultorios WHERE id=? AND eliminado_en IS NULL`).get(consultorioId);
+      if (!clinic) throw new ApiError(404, 'Consultorio no encontrado');
+      const settingsPath = clinic.slug ? `/c/${clinic.slug}/configuracion` : '/configuracion';
+
+      const { tokens } = await gmailGoogle.getToken(String(req.query.code));
+      if (!tokens.refresh_token) {
+        throw new ApiError(401, 'Google no otorgó el permiso permanente para enviar correos');
+      }
+      if (!tokens.id_token) throw new ApiError(401, 'Google no devolvió un token válido');
+      const ticket = await gmailGoogle.verifyIdToken({ idToken: tokens.id_token, audience: config.google.clientId });
+      const profile = ticket.getPayload();
+      const gmailEmail = String(profile.email || '').trim().toLowerCase();
+      if (!gmailEmail || gmailEmail !== String(req.user.email || '').trim().toLowerCase()) {
+        throw new ApiError(403, 'Debe autorizar con la misma cuenta de Google con la que inició sesión');
+      }
+
+      const refreshToken = encryptSecret(tokens.refresh_token);
+      const accessToken = tokens.access_token ? encryptSecret(tokens.access_token) : null;
+      const expiresAt = tokens.expiry_date ? new Date(tokens.expiry_date).toISOString() : null;
+      db.prepare(`INSERT INTO consultorio_email
+        (consultorio_id, modo, smtp_user, smtp_pass_cifrado, oauth_provider, gmail_user,
+         gmail_refresh_token_cifrado, gmail_access_token_cifrado, gmail_access_token_expira_en,
+         activo, verificado_en, ultimo_error, actualizado_en)
+        VALUES (?, 'propio', ?, NULL, 'gmail_oauth', ?, ?, ?, ?, 1, CURRENT_TIMESTAMP, NULL, CURRENT_TIMESTAMP)
+        ON CONFLICT(consultorio_id) DO UPDATE SET
+          modo='propio', smtp_user=excluded.smtp_user, smtp_pass_cifrado=NULL,
+          oauth_provider='gmail_oauth', gmail_user=excluded.gmail_user,
+          gmail_refresh_token_cifrado=excluded.gmail_refresh_token_cifrado,
+          gmail_access_token_cifrado=excluded.gmail_access_token_cifrado,
+          gmail_access_token_expira_en=excluded.gmail_access_token_expira_en,
+          activo=1, verificado_en=CURRENT_TIMESTAMP, ultimo_error=NULL, actualizado_en=CURRENT_TIMESTAMP`)
+        .run(consultorioId, gmailEmail, gmailEmail, refreshToken, accessToken, expiresAt);
+      clearClinicTransporter(consultorioId);
+      console.log(`Gmail OAuth OK: consultorio=${consultorioId}, cuenta=${gmailEmail}`);
+      return res.redirect(303, `${config.clientUrl}${settingsPath}?correo=conectado`);
+    };
+    handle().catch((caught) => {
+      console.error('Gmail OAuth callback error:', caught?.message || caught);
+      redirectError(caught instanceof ApiError ? caught.message : 'No se pudo completar el enlace con Google');
+    });
+  });
+});
 
 router.post('/desarrollo', (req, res, next) => {
   try {

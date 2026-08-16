@@ -907,6 +907,36 @@ test('un archivo público faltante responde 404 sin interrumpir el servidor', as
   await request(app).get('/api/health').expect(200);
 });
 
+test('correo: el enlace con Google exige sesión y la desconexión limpia la configuración', async () => {
+  await request(app).get('/api/auth/google/gmail').expect(401);
+
+  const doctor = request.agent(app);
+  await doctor.post('/api/auth/desarrollo').send({ email: 'integration-doctor@test.local' }).expect(200);
+
+  const config = await doctor.get('/api/correo/configuracion').expect(200);
+  assert.equal(config.body.configuracion.oauth_conectado, false);
+  assert.equal(config.body.configuracion.modo, 'global');
+  assert.equal(config.body.configuracion.gmail_disponible, false);
+
+  await doctor.get('/api/auth/google/gmail').expect(503);
+
+  const callback = await doctor.get('/api/auth/google/gmail/callback').expect(303);
+  assert.match(callback.headers.location, /\/configuracion\?correo=error/);
+  assert.match(callback.headers.location, /motivo=/);
+
+  await doctor.post('/api/correo/gmail/desconectar').expect(200);
+  const after = await doctor.get('/api/correo/configuracion').expect(200);
+  assert.equal(after.body.configuracion.modo, 'global');
+  assert.equal(after.body.configuracion.oauth_conectado, false);
+
+  await doctor.put('/api/correo/configuracion').send({ modo: 'propio', smtp_user: 'clinica@gmail.com' }).expect(400);
+
+  const operative = request.agent(app);
+  await operative.post('/api/auth/desarrollo').send({ email: 'integration-operative@test.local' }).expect(200);
+  await operative.post('/api/correo/gmail/desconectar').expect(403);
+  await operative.get('/api/correo/configuracion').expect(403);
+});
+
 test('mantenimiento: conserva archivos de marca y limpia uploads huérfanos', async () => {
   const { runMaintenance } = await import('../src/maintenance.js');
   const { config } = await import('../src/config.js');

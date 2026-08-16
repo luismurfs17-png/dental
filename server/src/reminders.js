@@ -6,8 +6,10 @@ import { sendReminderEmail, smtpConfigured } from './email.js';
 function anyEmailConfigured() {
   if (smtpConfigured()) return true;
   return Boolean(db.prepare(`SELECT 1 FROM consultorio_email
-    WHERE modo='propio' AND activo=1 AND smtp_user IS NOT NULL AND smtp_pass_cifrado IS NOT NULL
-    LIMIT 1`).get());
+    WHERE modo='propio' AND activo=1 AND (
+      (oauth_provider='gmail_oauth' AND gmail_refresh_token_cifrado IS NOT NULL)
+      OR ((oauth_provider IS NULL OR oauth_provider='smtp') AND smtp_user IS NOT NULL AND smtp_pass_cifrado IS NOT NULL)
+    ) LIMIT 1`).get());
 }
 
 export function startReminders() {

@@ -12,10 +12,16 @@ export function smtpConfigured() {
 }
 
 export function getClinicEmailConfig(consultorioId) {
-  const row = db.prepare(`SELECT modo, smtp_host, smtp_port, smtp_secure, smtp_user, smtp_from,
-      activo, verificado_en, ultimo_error
+  const row = db.prepare(`SELECT modo, oauth_provider, smtp_host, smtp_port, smtp_secure, smtp_user,
+      smtp_from, gmail_user, gmail_refresh_token_cifrado, gmail_access_token_cifrado,
+      gmail_access_token_expira_en, activo, verificado_en, ultimo_error
     FROM consultorio_email WHERE consultorio_id = ?`).get(consultorioId);
-  if (!row || row.modo !== 'propio' || !row.activo || !row.smtp_user) return null;
+  if (!row || row.modo !== 'propio' || !row.activo) return null;
+  if (row.oauth_provider === 'gmail_oauth') {
+    if (!row.gmail_user || !row.gmail_refresh_token_cifrado) return null;
+    return row;
+  }
+  if (!row.smtp_user) return null;
   return row;
 }
 
@@ -30,6 +36,26 @@ function getGlobalTransporter() {
 }
 
 function createClinicTransporter(row) {
+  if (row.oauth_provider === 'gmail_oauth') {
+    const secrets = db.prepare(`SELECT gmail_refresh_token_cifrado, gmail_access_token_cifrado
+      FROM consultorio_email WHERE consultorio_id = ?`).get(row.consultorio_id);
+    const refreshToken = decryptSecret(secrets?.gmail_refresh_token_cifrado);
+    if (!refreshToken) return null;
+    return nodemailer.createTransport({
+      host: 'smtp.gmail.com',
+      port: 587,
+      secure: false,
+      auth: {
+        type: 'OAuth2',
+        user: row.gmail_user,
+        clientId: config.google.clientId,
+        clientSecret: config.google.clientSecret,
+        refreshToken,
+        accessToken: decryptSecret(secrets?.gmail_access_token_cifrado) || undefined,
+        expires: row.gmail_access_token_expira_en ? new Date(row.gmail_access_token_expira_en).getTime() : undefined
+      }
+    });
+  }
   const pass = decryptSecret(db.prepare(`SELECT smtp_pass_cifrado FROM consultorio_email
     WHERE consultorio_id = ?`).get(row.consultorio_id)?.smtp_pass_cifrado);
   if (!pass) return null;

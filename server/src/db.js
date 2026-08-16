@@ -74,6 +74,11 @@ ensureColumn('registros_clinicos', 'validado_por', 'INTEGER REFERENCES usuarios(
 ensureColumn('registros_clinicos', 'validado_en', 'TEXT');
 ensureColumn('auditoria', 'paciente_id', 'INTEGER REFERENCES pacientes(id)');
 ensureColumn('pagos', 'presupuesto_id', 'INTEGER REFERENCES presupuestos(id)');
+ensureColumn('consultorio_email', 'oauth_provider', "TEXT DEFAULT 'smtp'");
+ensureColumn('consultorio_email', 'gmail_user', 'TEXT');
+ensureColumn('consultorio_email', 'gmail_refresh_token_cifrado', 'TEXT');
+ensureColumn('consultorio_email', 'gmail_access_token_cifrado', 'TEXT');
+ensureColumn('consultorio_email', 'gmail_access_token_expira_en', 'TEXT');
 db.exec('DROP INDEX IF EXISTS uq_consultorios_slug');
 backfillClinicSlugs();
 db.exec('CREATE UNIQUE INDEX IF NOT EXISTS uq_consultorios_slug ON consultorios(slug COLLATE NOCASE) WHERE slug IS NOT NULL');
