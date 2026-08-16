@@ -6,15 +6,41 @@ export const DEFAULT_BRAND = {
   backgroundOpacity: 18,
 }
 
+export const BRAND_PALETTES = [
+  { name: 'Turquesa clínico', primary: '#24577a', accent: '#6672bd', background: '#f3fafc' },
+  { name: 'Menta dental', primary: '#1f7a5c', accent: '#7bc49b', background: '#f2faf5' },
+  { name: 'Coral cálido', primary: '#c2554d', accent: '#e8a18a', background: '#fdf5f2' },
+  { name: 'Lavanda suave', primary: '#5b4a8a', accent: '#a99bd4', background: '#f7f4fc' },
+  { name: 'Océano profundo', primary: '#0d5c7e', accent: '#2fa3b8', background: '#f0f8fb' },
+  { name: 'Marfil clásico', primary: '#6b5b3e', accent: '#b59a6f', background: '#faf7f0' },
+  { name: 'Fucsia moderno', primary: '#a8326b', accent: '#e07ba1', background: '#fdf3f7' },
+  { name: 'Grafito premium', primary: '#33415c', accent: '#8d99ae', background: '#f4f6f8' },
+]
+
+export const BRAND_FONTS = [
+  { value: 'fraunces', name: 'Fraunces (serif clásica)', stack: "'Fraunces', Georgia, serif" },
+  { value: 'nunito', name: 'Nunito (moderna redondeada)', stack: "'Nunito', 'Segoe UI', sans-serif" },
+  { value: 'montserrat', name: 'Montserrat (contemporánea)', stack: "'Montserrat', 'Segoe UI', sans-serif" },
+]
+
+export const FONT_FOR = (value) => BRAND_FONTS.find((font) => font.value === value) || BRAND_FONTS[0]
+
 export function clinicBrand(clinic) {
   return {
     name: clinic?.marca_nombre || clinic?.nombre || DEFAULT_BRAND.name,
+    eslogan: clinic?.eslogan || '',
     logo: clinic?.logo_url || null,
     primary: validColor(clinic?.color_primario, DEFAULT_BRAND.primary),
     accent: validColor(clinic?.color_acento, DEFAULT_BRAND.accent),
     background: validColor(clinic?.color_fondo, DEFAULT_BRAND.background),
     backgroundImage: clinic?.fondo_url || null,
     backgroundOpacity: clamp(Number(clinic?.fondo_opacidad ?? DEFAULT_BRAND.backgroundOpacity), 0, 45),
+    fondoEstilo: clinic?.fondo_estilo || 'imagen',
+    tipografia: clinic?.tipografia || 'fraunces',
+    bienvenida: clinic?.bienvenida || '',
+    whatsapp: clinic?.whatsapp || '',
+    facebook: clinic?.facebook || '',
+    instagram: clinic?.instagram || '',
   }
 }
 
@@ -23,6 +49,10 @@ export function clinicTheme(clinic) {
   const soft = mix(brand.primary, '#ffffff', .84)
   const softAccent = mix(brand.accent, '#ffffff', .82)
   const border = mix(brand.primary, '#ffffff', .78)
+  const gradient = `linear-gradient(135deg, ${brand.primary} 0%, ${brand.accent} 100%)`
+  const backgroundImage = brand.fondoEstilo === 'imagen' && brand.backgroundImage
+    ? `url("${brand.backgroundImage}")`
+    : brand.fondoEstilo === 'degradado' ? gradient : 'none'
   return {
     '--primary': brand.primary,
     '--primary-hover': mix(brand.primary, '#000000', .18),
@@ -41,8 +71,11 @@ export function clinicTheme(clinic) {
     '--coral': brand.accent,
     '--coral-dark': mix(brand.accent, '#000000', .2),
     '--line': border,
-    '--brand-background-image': brand.backgroundImage ? `url("${brand.backgroundImage}")` : 'none',
-    '--brand-background-opacity': String(brand.backgroundImage ? brand.backgroundOpacity / 100 : 0),
+    '--brand-gradient': gradient,
+    '--brand-art-bg': brand.fondoEstilo === 'degradado' ? gradient : brand.primary,
+    '--brand-background-image': backgroundImage,
+    '--brand-background-opacity': String(backgroundImage !== 'none' ? brand.backgroundOpacity / 100 : 0),
+    '--font-heading': FONT_FOR(brand.tipografia).stack,
   }
 }
 

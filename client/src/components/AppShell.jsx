@@ -120,7 +120,7 @@ export default function AppShell() {
         <Brand brand={brand} iconSize={23} />
         <div className="clinic-chip">
           <span>{(user?.consultorio?.nombre || (adminOnly ? 'Administración' : 'Mi consultorio')).slice(0, 1)}</span>
-          <div><strong>{user?.consultorio?.nombre || (adminOnly ? 'Administración' : 'Mi consultorio')}</strong><small>{isPatient ? 'Portal del paciente' : adminOnly ? 'Superadministración' : role === 'doctor' ? 'Cuenta médica' : 'Equipo operativo'}</small></div>
+          <div><strong>{user?.consultorio?.nombre || (adminOnly ? 'Administración' : 'Mi consultorio')}</strong><small>{isPatient ? 'Portal del paciente' : adminOnly ? 'Superadministración' : role === 'doctor' ? 'Cuenta médica' : 'Equipo operativo'}</small>{brand.eslogan && <em className="clinic-eslogan">{brand.eslogan}</em>}</div>
         </div>
         <nav className="side-nav" aria-label="Navegación principal">
           <small>ESPACIO DE TRABAJO</small>
@@ -138,14 +138,15 @@ export default function AppShell() {
           <Brand brand={brand} iconSize={19} />
           <div className="mobile-top-actions"><NavLink className="notification-button" to={isPatient ? '/historia' : '/notificaciones'} aria-label="Notificaciones"><Icon name="bell" /></NavLink><button className="notification-button" onClick={() => setMobileMenu(true)} aria-label="Abrir menú"><Icon name="menu" /></button></div>
         </div>
-        <main key={location.pathname} className="main-content"><Outlet /></main>
+        <main key={location.pathname} className={`main-content ${brand.whatsapp ? 'has-whatsapp' : ''}`}><Outlet /></main>
       </div>
 
       <nav className="bottom-nav" aria-label="Navegación móvil">
         {mobileItems.map((item) => <NavItem key={item.to} item={item} mobile />)}
         {!isPatient && <button className="mobile-more" onClick={() => setMobileMenu(true)}><span className="nav-icon"><Icon name="menu" size={21} /></span><span>Más</span></button>}
       </nav>
-      {mobileMenu && createPortal(<div className="mobile-menu-backdrop" style={theme} onClick={(event) => event.target === event.currentTarget && setMobileMenu(false)}><section className="mobile-menu" role="dialog" aria-modal="true" aria-label="Menú de navegación"><header><div><small>{brand.name}</small><strong>{user?.nombre || 'Usuario'}</strong></div><button className="icon-button" onClick={() => setMobileMenu(false)} aria-label="Cerrar menú"><Icon name="close" /></button></header><nav>{navItems.map((item) => <NavItem key={item.to} item={item} />)}</nav><button className="mobile-logout" onClick={logout}><Icon name="logout" /> Cerrar sesión</button></section></div>, document.body)}
+      {brandedClinic && brand.whatsapp && <a className="whatsapp-float" href={`https://wa.me/${brand.whatsapp.replace(/[^0-9]/g, '')}`} target="_blank" rel="noreferrer" aria-label="Escribir por WhatsApp"><Icon name="whatsapp" size={26} /></a>}
+      {mobileMenu && createPortal(<div className="mobile-menu-backdrop" style={theme} onClick={(event) => event.target === event.currentTarget && setMobileMenu(false)}><section className="mobile-menu" role="dialog" aria-modal="true" aria-label="Menú de navegación"><header><div><small>{brand.eslogan || brand.name}</small><strong>{user?.nombre || 'Usuario'}</strong></div><button className="icon-button" onClick={() => setMobileMenu(false)} aria-label="Cerrar menú"><Icon name="close" /></button></header><nav>{navItems.map((item) => <NavItem key={item.to} item={item} />)}</nav><button className="mobile-logout" onClick={logout}><Icon name="logout" /> Cerrar sesión</button></section></div>, document.body)}
     </div>
   )
 }

@@ -40,6 +40,14 @@ function shell({ brand, clinic, body }) {
   const logoBlock = logo
     ? `<img src="${logo}" alt="${brand.name}" style="max-height:64px;max-width:220px;display:block;margin:0 auto 12px auto;" />`
     : `<div style="font-size:20px;font-weight:700;color:${brand.primary};text-align:center;margin:0 0 12px 0;">${brand.name}</div>`;
+  const sloganBlock = clinic?.eslogan
+    ? `<div style="text-align:center;color:#ffffff;font-size:11px;letter-spacing:.5px;margin-top:5px;opacity:.85;">${clinic.eslogan}</div>`
+    : '';
+  const socialLinks = [['Facebook', clinic?.facebook], ['Instagram', clinic?.instagram]].filter(([, value]) => value)
+    .map(([label, value]) => `<a href="${value}" style="color:#607d8b;text-decoration:underline;margin:0 6px;">${label}</a>`).join('');
+  const whatsappLink = clinic?.whatsapp
+    ? `<a href="https://wa.me/${String(clinic.whatsapp).replace(/[^0-9]/g, '')}" style="color:#607d8b;text-decoration:underline;margin:0 6px;">WhatsApp</a>`
+    : '';
   return `<!DOCTYPE html>
 <html lang="es">
 <head>
@@ -54,13 +62,14 @@ function shell({ brand, clinic, body }) {
           <td style="background:${brand.primary};padding:22px 24px;">
             ${logoBlock}
             <div style="text-align:center;color:#ffffff;font-size:13px;letter-spacing:1px;">${brand.name.toUpperCase()}</div>
+            ${sloganBlock}
           </td>
         </tr>
         <tr><td style="padding:28px 24px;color:#263238;font-size:15px;line-height:1.55;">${body}</td></tr>
         <tr>
           <td style="background:#f4f7f9;padding:16px 24px;text-align:center;color:#607d8b;font-size:12px;line-height:1.5;">
             ${brand.name}<br />
-            ${clinic?.telefono ? `Teléfono: ${clinic.telefono}<br />` : ''}Tecnología de CopaApp · ${config.clientUrl}
+            ${clinic?.telefono ? `Teléfono: ${clinic.telefono}<br />` : ''}${socialLinks || whatsappLink ? `<div style="margin-top:4px;">${socialLinks}${whatsappLink}</div>` : ''}Tecnología de CopaApp · ${config.clientUrl}
           </td>
         </tr>
       </table>

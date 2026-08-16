@@ -226,6 +226,24 @@ router.patch('/consultorio', allowRoles('doctor'), async (req, res) => {
       throw new ApiError(400, 'Las horas del recordatorio deben estar entre 1 y 72');
     }
   }
+  if (req.body.eslogan !== undefined && String(req.body.eslogan || '').trim().length > 90) {
+    throw new ApiError(400, 'El eslogan no puede superar 90 caracteres');
+  }
+  if (req.body.tipografia !== undefined && !['fraunces', 'nunito', 'montserrat'].includes(req.body.tipografia)) {
+    throw new ApiError(400, 'Tipografía no válida');
+  }
+  if (req.body.fondo_estilo !== undefined && !['imagen', 'degradado', 'color'].includes(req.body.fondo_estilo)) {
+    throw new ApiError(400, 'Estilo de fondo no válido');
+  }
+  if (req.body.bienvenida !== undefined && String(req.body.bienvenida || '').trim().length > 200) {
+    throw new ApiError(400, 'El mensaje de bienvenida no puede superar 200 caracteres');
+  }
+  if (req.body.whatsapp !== undefined) {
+    const whatsappValue = String(req.body.whatsapp || '').trim();
+    if (whatsappValue && !/^[+]?[0-9 ]{6,20}$/.test(whatsappValue)) {
+      throw new ApiError(400, 'El número de WhatsApp no es válido');
+    }
+  }
   const requestedBrandName = req.body.marca_nombre === undefined ? null : String(req.body.marca_nombre || '').trim();
   if (requestedBrandName && requestedBrandName.length > 60) {
     throw new ApiError(400, 'El nombre de marca no puede superar 60 caracteres');
@@ -261,6 +279,14 @@ router.patch('/consultorio', allowRoles('doctor'), async (req, res) => {
   const reminderHours = req.body.recordatorio_horas === undefined
     ? current.recordatorio_horas ?? null
     : (req.body.recordatorio_horas === null ? null : Number(req.body.recordatorio_horas));
+  const brandFields = ['eslogan', 'bienvenida', 'whatsapp', 'facebook', 'instagram'];
+  const brandValues = brandFields.map((field) => {
+    if (req.body[field] === undefined) return current[field] ?? null;
+    const value = String(req.body[field] || '').trim();
+    return value || null;
+  });
+  const tipografia = req.body.tipografia === undefined ? (current.tipografia || 'fraunces') : req.body.tipografia;
+  const fondoEstilo = req.body.fondo_estilo === undefined ? (current.fondo_estilo || 'imagen') : req.body.fondo_estilo;
   if (primaryChanged) {
     try { await createClinicIcons({ ...current, color_primario: primary }); }
     catch { throw new ApiError(400, 'No se pudo actualizar el color con el logo actual'); }
@@ -268,8 +294,10 @@ router.patch('/consultorio', allowRoles('doctor'), async (req, res) => {
   db.transaction(() => {
     db.prepare(`UPDATE consultorios SET nombre=?, nit=?, telefono=?, email=?, direccion=?, zona_horaria=?, modo_cobro=?,
         marca_nombre=?, color_primario=?, color_acento=?, color_fondo=?, fondo_opacidad=?, recordatorio_horas=?,
+        eslogan=?, bienvenida=?, whatsapp=?, facebook=?, instagram=?, tipografia=?, fondo_estilo=?,
         actualizado_en=CURRENT_TIMESTAMP WHERE id=?`)
-      .run(...values, brandName, primary, accent, background, backgroundOpacity, reminderHours, tenant(req));
+      .run(...values, brandName, primary, accent, background, backgroundOpacity, reminderHours,
+        ...brandValues, tipografia, fondoEstilo, tenant(req));
     log(req, 'actualizar', 'consultorio', tenant(req), req.body);
   })();
   const updated = db.prepare('SELECT * FROM consultorios WHERE id=?').get(tenant(req));

@@ -532,6 +532,25 @@ test('identidad visual: solo doctores editan y los archivos no cruzan consultori
   await doctor.patch('/api/consultorio').send({ color_acento: '#ffff00' }).expect(400);
   await doctor.patch('/api/consultorio').send({ marca_nombre: 'M'.repeat(61) }).expect(400);
   await doctor.patch('/api/consultorio').send({ fondo_opacidad: 60 }).expect(400);
+  await doctor.patch('/api/consultorio').send({
+    eslogan: 'Tu sonrisa, nuestro compromiso', bienvenida: 'Reserva y cuida tu sonrisa',
+    whatsapp: '+58 412 555 1234', facebook: 'https://facebook.com/sonrisanorte', instagram: 'https://instagram.com/sonrisanorte',
+    tipografia: 'nunito', fondo_estilo: 'degradado'
+  }).expect(200);
+  const branded = await doctor.get('/api/consultorio').expect(200);
+  assert.equal(branded.body.consultorio.eslogan, 'Tu sonrisa, nuestro compromiso');
+  assert.equal(branded.body.consultorio.bienvenida, 'Reserva y cuida tu sonrisa');
+  assert.equal(branded.body.consultorio.whatsapp, '+58 412 555 1234');
+  assert.equal(branded.body.consultorio.facebook, 'https://facebook.com/sonrisanorte');
+  assert.equal(branded.body.consultorio.instagram, 'https://instagram.com/sonrisanorte');
+  assert.equal(branded.body.consultorio.tipografia, 'nunito');
+  assert.equal(branded.body.consultorio.fondo_estilo, 'degradado');
+  await doctor.patch('/api/consultorio').send({ eslogan: 'E'.repeat(91) }).expect(400);
+  await doctor.patch('/api/consultorio').send({ bienvenida: 'B'.repeat(201) }).expect(400);
+  await doctor.patch('/api/consultorio').send({ whatsapp: '12345' }).expect(400);
+  await doctor.patch('/api/consultorio').send({ tipografia: 'comic' }).expect(400);
+  await doctor.patch('/api/consultorio').send({ fondo_estilo: 'rayas' }).expect(400);
+  await doctor.patch('/api/consultorio').send({ eslogan: '', bienvenida: '', whatsapp: '', facebook: '', instagram: '', tipografia: 'fraunces', fondo_estilo: 'imagen' }).expect(200);
   await operative.patch('/api/consultorio').send({ marca_nombre: 'Sin permiso' }).expect(403);
   await operative.post('/api/consultorio/identidad/logo').expect(403);
   await doctor.post('/api/consultorio/identidad/logo')
@@ -552,6 +571,10 @@ test('identidad visual: solo doctores editan y los archivos no cruzan consultori
   assert.equal(publicClinic.body.consultorio.marca_nombre, 'Sonrisa Norte');
   assert.equal(publicClinic.body.consultorio.app_path, `/c/${temporary.clinicSlug}`);
   assert.match(publicClinic.body.consultorio.logo_url, new RegExp(`/api/publico/clinicas/${temporary.clinicSlug}/logo`));
+  assert.equal(publicClinic.body.consultorio.tipografia, 'fraunces');
+  assert.equal(publicClinic.body.consultorio.fondo_estilo, 'imagen');
+  assert.equal(publicClinic.body.consultorio.eslogan, null);
+  assert.equal(publicClinic.body.consultorio.whatsapp, null);
   assert.equal('email' in publicClinic.body.consultorio, false);
   const manifest = await request(app).get(`/api/publico/clinicas/${temporary.clinicSlug}/manifest.webmanifest`).expect(200);
   assert.match(manifest.headers['content-type'], /application\/manifest\+json/);

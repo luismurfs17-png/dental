@@ -102,7 +102,7 @@ export default function Login({ branded = false, installOnly = false, clinicSlug
     <div className={`login-page ${branded ? 'branded-login' : 'neutral-login'}`} style={theme}>
       <section className="login-art" aria-hidden="true">
         <LoginBrand brand={brand} />
-        <div className="art-copy"><span className="eyebrow light">ACCESO CLÍNICO SEGURO</span><h1>{branded ? 'Tu clínica, siempre contigo.' : 'Tu espacio clínico, en un solo lugar.'}</h1><p>{branded ? `Accede al portal de ${brand.name} para gestionar o continuar tu atención.` : 'Accede a citas, pacientes, pagos e historia clínica según tu perfil.'}</p></div>
+        <div className="art-copy"><span className="eyebrow light">ACCESO CLÍNICO SEGURO</span><h1>{branded ? 'Tu clínica, siempre contigo.' : 'Tu espacio clínico, en un solo lugar.'}</h1>{branded && brand.eslogan && <p className="art-eslogan">{brand.eslogan}</p>}<p>{branded ? (brand.bienvenida || `Accede al portal de ${brand.name} para gestionar o continuar tu atención.`) : 'Accede a citas, pacientes, pagos e historia clínica según tu perfil.'}</p></div>
         <div className="art-orbit orbit-one" /><div className="art-orbit orbit-two" />
         <div className="floating-card"><span><Icon name="calendar" /></span><div><small>Próxima visita</small><strong>Hoy · 15:30</strong></div><i><Icon name="check" size={14} /></i></div>
         <div className="art-footer">ACCESO SEGURO · DATOS PROTEGIDOS</div>
@@ -112,7 +112,7 @@ export default function Login({ branded = false, installOnly = false, clinicSlug
         <div className="login-form-wrap">
           <span className="login-kicker">{installOnly ? 'APLICACIÓN MÓVIL' : 'PORTAL SEGURO'}</span>
           <h2>{installOnly ? <>Instala tu<br />clínica.</> : <>Ingresa a<br />tu espacio.</>}</h2>
-          <p>{installOnly ? 'Añade el portal a tu pantalla de inicio para abrirlo como una aplicación.' : 'Continúa como doctor, equipo operativo o paciente.'}</p>
+          <p>{installOnly ? 'Añade el portal a tu pantalla de inicio para abrirlo como una aplicación.' : (branded ? (brand.bienvenida || 'Continúa como doctor, equipo operativo o paciente.') : 'Continúa como doctor, equipo operativo o paciente.')}</p>
           {clinicMismatch && <div className="inline-message">Tienes una sesión abierta en otra clínica. Continúa con Google para cambiar a {brand.name}.</div>}
           {error && <div className="inline-error">{error}</div>}
           {installOnly && <InstallApp clinic={portal.clinic} />}

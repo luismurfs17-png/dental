@@ -12,7 +12,8 @@ function clinicBySlug(value) {
   const slug = String(value || '').toLowerCase();
   if (!validSlug(slug)) throw new ApiError(404, 'Clínica no encontrada');
   const clinic = db.prepare(`SELECT slug, nombre, marca_nombre, color_primario, color_acento, color_fondo,
-      fondo_opacidad, logo_path, fondo_path
+      fondo_opacidad, fondo_estilo, tipografia, eslogan, bienvenida, whatsapp, facebook, instagram,
+      telefono, direccion, logo_path, fondo_path
     FROM consultorios WHERE slug=? AND eliminado_en IS NULL`).get(slug);
   if (!clinic) throw new ApiError(404, 'Clínica no encontrada');
   return clinic;
@@ -32,6 +33,15 @@ function publicClinic(clinic) {
     color_acento: clinic.color_acento,
     color_fondo: clinic.color_fondo,
     fondo_opacidad: clinic.fondo_opacidad,
+    fondo_estilo: clinic.fondo_estilo || 'imagen',
+    tipografia: clinic.tipografia || 'fraunces',
+    eslogan: clinic.eslogan || null,
+    bienvenida: clinic.bienvenida || null,
+    whatsapp: clinic.whatsapp || null,
+    facebook: clinic.facebook || null,
+    instagram: clinic.instagram || null,
+    telefono: clinic.telefono || null,
+    direccion: clinic.direccion || null,
     logo_url: assetUrl(clinic, 'logo'),
     fondo_url: assetUrl(clinic, 'fondo'),
     manifest_url: `/api/publico/clinicas/${clinic.slug}/manifest.webmanifest`,

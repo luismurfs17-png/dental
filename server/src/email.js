@@ -119,7 +119,8 @@ export async function sendEmail(message, { consultorioId = null, citaId = null, 
 function appointmentForEmail(appointmentId) {
   return db.prepare(`SELECT c.id, c.consultorio_id, c.inicio, c.fin, c.precio_bs, p.email, p.nombres paciente,
       p.recordatorios_activos, u.nombre doctor, s.nombre servicio, co.nombre consultorio, co.marca_nombre,
-      co.telefono, co.slug, co.logo_path, co.color_primario, co.color_acento
+      co.telefono, co.slug, co.logo_path, co.color_primario, co.color_acento, co.eslogan,
+      co.whatsapp, co.facebook, co.instagram
     FROM citas c
     JOIN pacientes p ON p.id=c.paciente_id AND p.consultorio_id=c.consultorio_id
     JOIN usuarios u ON u.id=c.doctor_id AND u.consultorio_id=c.consultorio_id
@@ -151,7 +152,7 @@ export async function sendReminderEmail(appointmentId) {
 }
 
 export async function sendClinicEmail({ consultorioId, to, patientName, subject, heading, lines, actionUrl, actionLabel, tipo }) {
-  const clinic = db.prepare(`SELECT nombre, marca_nombre, telefono, slug, logo_path, color_primario, color_acento
+  const clinic = db.prepare(`SELECT nombre, marca_nombre, telefono, slug, logo_path, color_primario, color_acento, eslogan, whatsapp, facebook, instagram
     FROM consultorios WHERE id=? AND eliminado_en IS NULL`).get(consultorioId);
   if (!clinic) return false;
   const mail = buildSimpleMail({ clinic, patientName, subject, heading, lines, actionUrl, actionLabel });
@@ -159,7 +160,7 @@ export async function sendClinicEmail({ consultorioId, to, patientName, subject,
 }
 
 export async function sendTestEmail(consultorioId, to) {
-  const clinic = db.prepare(`SELECT nombre, marca_nombre, telefono, slug, logo_path, color_primario, color_acento
+  const clinic = db.prepare(`SELECT nombre, marca_nombre, telefono, slug, logo_path, color_primario, color_acento, eslogan, whatsapp, facebook, instagram
     FROM consultorios WHERE id=? AND eliminado_en IS NULL`).get(consultorioId);
   if (!clinic) throw new Error('Consultorio no encontrado');
   const mail = buildSimpleMail({
@@ -173,7 +174,7 @@ export async function sendTestEmail(consultorioId, to) {
 }
 
 export async function sendWelcomeEmail({ consultorioId, to, patientName, portalUrl, installUrl }) {
-  const clinic = db.prepare(`SELECT nombre, marca_nombre, telefono, slug, logo_path, color_primario, color_acento
+  const clinic = db.prepare(`SELECT nombre, marca_nombre, telefono, slug, logo_path, color_primario, color_acento, eslogan, whatsapp, facebook, instagram
     FROM consultorios WHERE id=? AND eliminado_en IS NULL`).get(consultorioId);
   if (!clinic) return false;
   const mail = buildSimpleMail({
