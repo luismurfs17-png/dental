@@ -100,12 +100,12 @@ export function findOrCreateGoogleUser(profile, clinicSlug = '') {
         ORDER BY id LIMIT 1`).get(email);
       if (doctor) {
         user = doctor;
-        console.log(`Superadmin ${email}: se usará la cuenta doctor #${doctor.id} (consultorio ${doctor.consultorio_id})`);
+        console.log(`Superadmin: se usará la cuenta doctor #${doctor.id} (consultorio ${doctor.consultorio_id})`);
       } else {
         db.prepare(`UPDATE usuarios SET rol = 'doctor', actualizado_en = CURRENT_TIMESTAMP WHERE id = ?`)
           .run(user.id);
         user.rol = 'doctor';
-        console.log(`Superadmin ${email} promovido de paciente a doctor (id=${user.id})`);
+        console.log(`Superadmin promovido de paciente a doctor (id=${user.id})`);
       }
     }
     const estado = resolveLoginEstado(user, isAdminEmail);
@@ -177,7 +177,7 @@ router.get('/google/callback', asyncRoute(async (req, res) => {
     const ticket = await google.verifyIdToken({ idToken: tokens.id_token, audience: config.google.clientId });
     const user = findOrCreateGoogleUser(ticket.getPayload(), clinicSlug);
     issueSession(res, user);
-    console.log(`OAuth OK: ${user.email} (id=${user.id}, admin=${Boolean(user.es_admin)}, estado=${user.estado})`);
+    console.log(`OAuth OK: id=${user.id}, admin=${Boolean(user.es_admin)}, estado=${user.estado}`);
     const suffix = clinicSlug ? `?clinica=${encodeURIComponent(clinicSlug)}` : '';
     const successPath = clinicSlug ? `/c/${clinicSlug}/auth/success` : '/auth/success';
     return res.redirect(303, `${config.clientUrl}${successPath}${suffix}`);
