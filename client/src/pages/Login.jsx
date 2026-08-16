@@ -104,7 +104,7 @@ export default function Login({ branded = false, installOnly = false, clinicSlug
         <LoginBrand brand={brand} />
         <div className="art-copy"><span className="eyebrow light">ACCESO CLÍNICO SEGURO</span><h1>{branded ? 'Tu clínica, siempre contigo.' : 'Tu espacio clínico, en un solo lugar.'}</h1>{branded && brand.eslogan && <p className="art-eslogan">{brand.eslogan}</p>}<p>{branded ? (brand.bienvenida || `Accede al portal de ${brand.name} para gestionar o continuar tu atención.`) : 'Accede a citas, pacientes, pagos e historia clínica según tu perfil.'}</p></div>
         <div className="art-orbit orbit-one" /><div className="art-orbit orbit-two" />
-        <div className="floating-card"><span><Icon name="calendar" /></span><div><small>Próxima visita</small><strong>Hoy · 15:30</strong></div><i><Icon name="check" size={14} /></i></div>
+        <ChatCard brand={brand} />
         <div className="art-footer">ACCESO SEGURO · DATOS PROTEGIDOS</div>
       </section>
       <main className="login-panel">
@@ -137,6 +137,21 @@ export default function Login({ branded = false, installOnly = false, clinicSlug
 
 function LoginBrand({ brand, mobile = false }) {
   return <div className={mobile ? 'mobile-login-brand' : 'login-brand'}><span className={`brand-mark ${brand.logo ? 'has-logo' : ''}`}>{brand.logo ? <img src={brand.logo} alt="" /> : <Icon name="tooth" size={mobile ? 22 : 28} />}</span><span>{brand.name}</span></div>
+}
+
+function ChatCard({ brand }) {
+  const number = String(brand.whatsapp || '').replace(/[^0-9]/g, '')
+  const inner = <>
+    <span><Icon name="whatsapp" /></span>
+    <div>
+      <small>Chat de {brand.name}</small>
+      <div className="chat-bubbles"><i className="chat-bubble in">¡Hola! ¿Cómo agendo una cita?</i><i className="chat-bubble out">Con un clic y sin llamadas ✓</i></div>
+      {number ? <strong className="chat-cta">Escribir por WhatsApp <Icon name="arrow" size={14} /></strong> : <small className="chat-hint">Disponible en tu consultorio</small>}
+    </div>
+  </>
+  return number
+    ? <a className="floating-card chat-card" href={`https://wa.me/${number}`} target="_blank" rel="noreferrer" aria-label={`Escribir a ${brand.name} por WhatsApp`}>{inner}</a>
+    : <div className="floating-card chat-card" aria-hidden="true">{inner}</div>
 }
 
 export function homeFor(user) {
