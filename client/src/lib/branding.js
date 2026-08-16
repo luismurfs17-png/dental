@@ -25,6 +25,10 @@ export const BRAND_FONTS = [
 
 export const FONT_FOR = (value) => BRAND_FONTS.find((font) => font.value === value) || BRAND_FONTS[0]
 
+export function mapsUrl(ubicacion) {
+  return ubicacion ? `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(String(ubicacion).trim())}` : ''
+}
+
 export function clinicBrand(clinic) {
   return {
     name: clinic?.marca_nombre || clinic?.nombre || DEFAULT_BRAND.name,
@@ -41,6 +45,7 @@ export function clinicBrand(clinic) {
     whatsapp: clinic?.whatsapp || '',
     facebook: clinic?.facebook || '',
     instagram: clinic?.instagram || '',
+    ubicacion: clinic?.ubicacion || '',
   }
 }
 

@@ -6,8 +6,8 @@ const DEMO_NAME = 'Clínica Demo SONRIDENT';
 const seedDemo = db.transaction(() => {
   let clinic = db.prepare(`SELECT id FROM consultorios WHERE email=? AND eliminado_en IS NULL`).get(DEMO_EMAIL);
   if (!clinic) {
-    clinic = { id: Number(db.prepare(`INSERT INTO consultorios (nombre,slug,nit,telefono,email,direccion)
-      VALUES (?,?,'900100200','+591 70001111',?,'Av. Demo 100, La Paz')`)
+    clinic = { id: Number(db.prepare(`INSERT INTO consultorios (nombre,slug,nit,telefono,email,direccion,ubicacion)
+      VALUES (?,?,'900100200','+591 70001111',?,'Av. Demo 100, La Paz','Av. Demo 100, La Paz, Bolivia')`)
       .run(DEMO_NAME, uniqueClinicSlug(DEMO_NAME), DEMO_EMAIL).lastInsertRowid) };
   } else {
     db.prepare(`UPDATE consultorios SET nombre=? WHERE id=?`).run(DEMO_NAME, clinic.id);

@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { Navigate, useParams, useSearchParams } from 'react-router-dom'
 import { api } from '../lib/api.js'
-import { clinicBrand, clinicTheme } from '../lib/branding.js'
+import { clinicBrand, clinicTheme, mapsUrl } from '../lib/branding.js'
 import { useAuth } from '../context/AuthContext.jsx'
 import { useClinicPortal } from '../hooks/useClinicPortal.js'
 import Icon from '../components/Icon.jsx'
@@ -141,17 +141,18 @@ function LoginBrand({ brand, mobile = false }) {
 
 function ChatCard({ brand }) {
   const number = String(brand.whatsapp || '').replace(/[^0-9]/g, '')
-  const inner = <>
-    <span><Icon name="whatsapp" /></span>
-    <div>
-      <small>Chat de {brand.name}</small>
-      <div className="chat-bubbles"><i className="chat-bubble in">¡Hola! ¿Cómo agendo una cita?</i><i className="chat-bubble out">Con un clic y sin llamadas ✓</i></div>
-      {number ? <strong className="chat-cta">Escribir por WhatsApp <Icon name="arrow" size={14} /></strong> : <small className="chat-hint">Disponible en tu consultorio</small>}
+  const location = mapsUrl(brand.ubicacion)
+  return (
+    <div className="floating-card chat-card" aria-hidden={!number && !location}>
+      <span><Icon name="whatsapp" /></span>
+      <div>
+        <small>Chat de {brand.name}</small>
+        <div className="chat-bubbles"><span className="chat-bubble in">¡Hola! ¿Cómo agendo una cita?</span><span className="chat-bubble out">Con un clic y sin llamadas ✓</span></div>
+        {number ? <a className="chat-cta" href={`https://wa.me/${number}`} target="_blank" rel="noreferrer" aria-label={`Escribir a ${brand.name} por WhatsApp`}>Escribir por WhatsApp <Icon name="arrow" size={14} /></a> : <small className="chat-hint">Disponible en tu consultorio</small>}
+        {location && <a className="chat-cta chat-cta-maps" href={location} target="_blank" rel="noreferrer" aria-label="Ver la ubicación en el mapa">Cómo llegar <Icon name="arrow" size={14} /></a>}
+      </div>
     </div>
-  </>
-  return number
-    ? <a className="floating-card chat-card" href={`https://wa.me/${number}`} target="_blank" rel="noreferrer" aria-label={`Escribir a ${brand.name} por WhatsApp`}>{inner}</a>
-    : <div className="floating-card chat-card" aria-hidden="true">{inner}</div>
+  )
 }
 
 export function homeFor(user) {

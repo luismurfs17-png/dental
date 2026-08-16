@@ -87,6 +87,7 @@ ensureColumn('consultorios', 'bienvenida', 'TEXT');
 ensureColumn('consultorios', 'whatsapp', 'TEXT');
 ensureColumn('consultorios', 'facebook', 'TEXT');
 ensureColumn('consultorios', 'instagram', 'TEXT');
+ensureColumn('consultorios', 'ubicacion', 'TEXT');
 db.exec('DROP INDEX IF EXISTS uq_consultorios_slug');
 backfillClinicSlugs();
 db.exec('CREATE UNIQUE INDEX IF NOT EXISTS uq_consultorios_slug ON consultorios(slug COLLATE NOCASE) WHERE slug IS NOT NULL');

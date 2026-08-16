@@ -48,6 +48,9 @@ function shell({ brand, clinic, body }) {
   const whatsappLink = clinic?.whatsapp
     ? `<a href="https://wa.me/${String(clinic.whatsapp).replace(/[^0-9]/g, '')}" style="color:#607d8b;text-decoration:underline;margin:0 6px;">WhatsApp</a>`
     : '';
+  const mapsLink = clinic?.ubicacion
+    ? `<a href="https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(clinic.ubicacion)}" style="color:#607d8b;text-decoration:underline;margin:0 6px;">Cómo llegar</a>`
+    : '';
   return `<!DOCTYPE html>
 <html lang="es">
 <head>
@@ -69,7 +72,7 @@ function shell({ brand, clinic, body }) {
         <tr>
           <td style="background:#f4f7f9;padding:16px 24px;text-align:center;color:#607d8b;font-size:12px;line-height:1.5;">
             ${brand.name}<br />
-            ${clinic?.telefono ? `Teléfono: ${clinic.telefono}<br />` : ''}${socialLinks || whatsappLink ? `<div style="margin-top:4px;">${socialLinks}${whatsappLink}</div>` : ''}Tecnología de CopaApp · ${config.clientUrl}
+            ${clinic?.telefono ? `Teléfono: ${clinic.telefono}<br />` : ''}${socialLinks || whatsappLink || mapsLink ? `<div style="margin-top:4px;">${socialLinks}${whatsappLink}${mapsLink}</div>` : ''}Tecnología de CopaApp · ${config.clientUrl}
           </td>
         </tr>
       </table>

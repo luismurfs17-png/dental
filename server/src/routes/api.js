@@ -238,6 +238,9 @@ router.patch('/consultorio', allowRoles('doctor'), async (req, res) => {
   if (req.body.bienvenida !== undefined && String(req.body.bienvenida || '').trim().length > 200) {
     throw new ApiError(400, 'El mensaje de bienvenida no puede superar 200 caracteres');
   }
+  if (req.body.ubicacion !== undefined && String(req.body.ubicacion || '').trim().length > 200) {
+    throw new ApiError(400, 'La ubicación no puede superar 200 caracteres');
+  }
   if (req.body.whatsapp !== undefined) {
     const whatsappValue = String(req.body.whatsapp || '').trim();
     if (whatsappValue && !/^[+]?[0-9 ]{6,20}$/.test(whatsappValue)) {
@@ -274,7 +277,7 @@ router.patch('/consultorio', allowRoles('doctor'), async (req, res) => {
     throw new ApiError(400, 'El color de fondo debe ser claro para mantener legible la aplicación');
   }
   const primaryChanged = primary !== current.color_primario;
-  const fields = ['nombre', 'nit', 'telefono', 'email', 'direccion', 'zona_horaria', 'modo_cobro'];
+  const fields = ['nombre', 'nit', 'telefono', 'email', 'direccion', 'ubicacion', 'zona_horaria', 'modo_cobro'];
   const values = fields.map((field) => req.body[field] ?? current[field]);
   const reminderHours = req.body.recordatorio_horas === undefined
     ? current.recordatorio_horas ?? null
@@ -292,7 +295,7 @@ router.patch('/consultorio', allowRoles('doctor'), async (req, res) => {
     catch { throw new ApiError(400, 'No se pudo actualizar el color con el logo actual'); }
   }
   db.transaction(() => {
-    db.prepare(`UPDATE consultorios SET nombre=?, nit=?, telefono=?, email=?, direccion=?, zona_horaria=?, modo_cobro=?,
+    db.prepare(`UPDATE consultorios SET nombre=?, nit=?, telefono=?, email=?, direccion=?, ubicacion=?, zona_horaria=?, modo_cobro=?,
         marca_nombre=?, color_primario=?, color_acento=?, color_fondo=?, fondo_opacidad=?, recordatorio_horas=?,
         eslogan=?, bienvenida=?, whatsapp=?, facebook=?, instagram=?, tipografia=?, fondo_estilo=?,
         actualizado_en=CURRENT_TIMESTAMP WHERE id=?`)

@@ -13,7 +13,7 @@ function clinicBySlug(value) {
   if (!validSlug(slug)) throw new ApiError(404, 'Clínica no encontrada');
   const clinic = db.prepare(`SELECT slug, nombre, marca_nombre, color_primario, color_acento, color_fondo,
       fondo_opacidad, fondo_estilo, tipografia, eslogan, bienvenida, whatsapp, facebook, instagram,
-      telefono, direccion, logo_path, fondo_path
+      ubicacion, telefono, direccion, logo_path, fondo_path
     FROM consultorios WHERE slug=? AND eliminado_en IS NULL`).get(slug);
   if (!clinic) throw new ApiError(404, 'Clínica no encontrada');
   return clinic;
@@ -40,6 +40,7 @@ function publicClinic(clinic) {
     whatsapp: clinic.whatsapp || null,
     facebook: clinic.facebook || null,
     instagram: clinic.instagram || null,
+    ubicacion: clinic.ubicacion || null,
     telefono: clinic.telefono || null,
     direccion: clinic.direccion || null,
     logo_url: assetUrl(clinic, 'logo'),

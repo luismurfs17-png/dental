@@ -545,6 +545,10 @@ test('identidad visual: solo doctores editan y los archivos no cruzan consultori
   assert.equal(branded.body.consultorio.instagram, 'https://instagram.com/sonrisanorte');
   assert.equal(branded.body.consultorio.tipografia, 'nunito');
   assert.equal(branded.body.consultorio.fondo_estilo, 'degradado');
+  await doctor.patch('/api/consultorio').send({ ubicacion: 'Av. 6 de Agosto, La Paz' }).expect(200);
+  const withUbicacion = await doctor.get('/api/consultorio').expect(200);
+  assert.equal(withUbicacion.body.consultorio.ubicacion, 'Av. 6 de Agosto, La Paz');
+  await doctor.patch('/api/consultorio').send({ ubicacion: 'U'.repeat(201) }).expect(400);
   await doctor.patch('/api/consultorio').send({ eslogan: 'E'.repeat(91) }).expect(400);
   await doctor.patch('/api/consultorio').send({ bienvenida: 'B'.repeat(201) }).expect(400);
   await doctor.patch('/api/consultorio').send({ whatsapp: '12345' }).expect(400);
@@ -575,6 +579,7 @@ test('identidad visual: solo doctores editan y los archivos no cruzan consultori
   assert.equal(publicClinic.body.consultorio.fondo_estilo, 'imagen');
   assert.equal(publicClinic.body.consultorio.eslogan, null);
   assert.equal(publicClinic.body.consultorio.whatsapp, null);
+  assert.equal(publicClinic.body.consultorio.ubicacion, 'Av. 6 de Agosto, La Paz');
   assert.equal('email' in publicClinic.body.consultorio, false);
   const manifest = await request(app).get(`/api/publico/clinicas/${temporary.clinicSlug}/manifest.webmanifest`).expect(200);
   assert.match(manifest.headers['content-type'], /application\/manifest\+json/);

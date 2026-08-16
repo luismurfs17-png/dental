@@ -25,6 +25,7 @@ CREATE TABLE IF NOT EXISTS consultorios (
   whatsapp TEXT,
   facebook TEXT,
   instagram TEXT,
+  ubicacion TEXT,
   logo_path TEXT,
   fondo_path TEXT,
   creado_en TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,

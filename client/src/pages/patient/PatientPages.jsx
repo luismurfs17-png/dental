@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { api, formatDate, formatMoney, formatTime, unwrap } from '../../lib/api.js'
+import { mapsUrl } from '../../lib/branding.js'
 import { useRemote } from '../../hooks/useRemote.js'
 import { useAuth } from '../../context/AuthContext.jsx'
 import Icon from '../../components/Icon.jsx'
@@ -60,6 +61,7 @@ export function BookAppointment() {
   const services = unwrap(servicesRemote.data, 'servicios')
   const doctors = unwrap(doctorsRemote.data, 'doctores')
   const mode = clinicRemote.data?.consultorio?.modo_cobro || 'mixto'
+  const mapsLink = mapsUrl(clinicRemote.data?.consultorio?.ubicacion)
   const selectedService = services.find((service) => String(service.id) === String(form.servicio_id))
 
   useEffect(() => {
@@ -83,7 +85,7 @@ export function BookAppointment() {
   }
 
   if (servicesRemote.loading || doctorsRemote.loading || profileRemote.loading || clinicRemote.loading) return <Loading label="Preparando la reserva" />
-  return <><PageHeader eyebrow="RESERVA EN LÍNEA" title="Un momento para tu sonrisa." description={mode === 'definir' ? 'Elige tratamiento y horario; el precio se define en tu consulta.' : 'Elige tratamiento, doctor y un horario realmente disponible.'} /><div className="booking-layout"><form className="booking-card" onSubmit={submit} onKeyDown={(e) => { if (e.key === 'Escape') { e.preventDefault(); setForm({ ...form, servicio_id: '', doctor_id: '', fecha: '', inicio: '', notas: '' }); setError(''); } }}>
+  return <><PageHeader eyebrow="RESERVA EN LÍNEA" title="Un momento para tu sonrisa." description={mode === 'definir' ? 'Elige tratamiento y horario; el precio se define en tu consulta.' : 'Elige tratamiento, doctor y un horario realmente disponible.'} />{mapsLink && <a className="maps-link" href={mapsLink} target="_blank" rel="noreferrer"><Icon name="pin" /> ¿Cómo llegar? Ver el consultorio en el mapa</a>}<div className="booking-layout"><form className="booking-card" onSubmit={submit} onKeyDown={(e) => { if (e.key === 'Escape') { e.preventDefault(); setForm({ ...form, servicio_id: '', doctor_id: '', fecha: '', inicio: '', notas: '' }); setError(''); } }}>
     <div className="form-step"><span>1</span><div><strong>¿Qué necesitas?</strong><small>Selecciona un tratamiento</small></div></div>
     <div className="service-options" role="radiogroup" aria-label="Tratamientos disponibles">
       {services.map((service) => (
