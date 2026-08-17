@@ -96,6 +96,9 @@ db.exec('CREATE INDEX IF NOT EXISTS idx_pagos_presupuesto ON pagos(consultorio_i
 
 makeColumnNullable('servicios', 'precio_bs', 'REAL');
 makeColumnNullable('citas', 'precio_bs', 'REAL');
+ensureColumn('presupuesto_items', 'detalle', 'TEXT');
+ensureColumn('presupuesto_items', 'total_bs', 'REAL');
+db.exec(`UPDATE presupuesto_items SET total_bs = CASE WHEN precio_bs IS NULL THEN NULL ELSE precio_bs * cantidad END WHERE total_bs IS NULL`);
 db.exec(fs.readFileSync(path.join(import.meta.dirname, 'schema.sql'), 'utf8'));
 
 function makeColumnNullable(table, column, type) {

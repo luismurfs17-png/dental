@@ -6,11 +6,23 @@ import Icon from '../../components/Icon.jsx'
 import { ErrorState, Loading, StatusPill } from '../../components/UI.jsx'
 
 function QuoteItem({ item }) {
+  const extras = item.detalle || []
+  const lineTotal = item.total_bs === null || item.total_bs === undefined
+    ? (extras.length ? formatMoney(extras.reduce((sum, part) => sum + part.precio_bs, 0)) : 'A definir')
+    : formatMoney(item.total_bs)
   return (
     <article className="quote-item">
-      <div className="quote-item-name"><strong>{item.nombre}</strong>{item.notas && <small>{item.notas}</small>}</div>
+      <div className="quote-item-name"><strong>{item.nombre}</strong>{item.notas && <small>{item.notas}</small>}
+        {extras.length > 0 && (
+          <small className="quote-item-parts">
+            {extras.map((part, index) => (
+              <span key={index}>{part.nombre} · {formatMoney(part.precio_bs)}</span>
+            ))}
+          </small>
+        )}
+      </div>
       <span className="quote-item-qty">{item.cantidad > 1 ? `×${item.cantidad}` : ''}{item.duracion_min ? <small>&nbsp;· {item.duracion_min} min</small> : null}</span>
-      <strong>{item.precio_bs === null || item.precio_bs === undefined ? 'A definir' : formatMoney(item.precio_bs)}</strong>
+      <strong>{lineTotal}</strong>
     </article>
   )
 }

@@ -2,7 +2,7 @@ import nodemailer from 'nodemailer';
 import { config } from './config.js';
 import { db } from './db.js';
 import { decryptSecret } from './crypto.js';
-import { buildAppointmentMail, buildReminderMail, buildSimpleMail } from './templates.js';
+import { buildAppointmentMail, buildReminderMail, buildQuoteMail, buildSimpleMail } from './templates.js';
 
 const clinicTransporters = new Map();
 let globalTransporter;
@@ -199,4 +199,44 @@ export async function sendPlatformEmail({ to, name, subject, heading, lines, act
   if (!smtpConfigured()) return false;
   const mail = buildSimpleMail({ clinic: {}, patientName: name, subject, heading, lines, actionUrl, actionLabel });
   return sendEmail({ to, ...mail }, { tipo: 'plataforma' });
+}
+
+export async function sendQuoteEmail(quoteId) {
+  const quote = db.prepare(`SELECT pr.id, pr.consultorio_id, pr.paciente_id, pr.titulo, pr.notas, pr.estado, pr.creado_en, pr.token_publico,
+      p.nombres, p.apellidos, p.email,
+      co.nombre, co.marca_nombre, co.telefono, co.slug, co.logo_path, co.color_primario, co.color_acento,
+      co.eslogan, co.whatsapp, co.facebook, co.instagram, co.ubicacion
+    FROM presupuestos pr
+    JOIN pacientes p ON p.id=pr.paciente_id AND p.consultorio_id=pr.consultorio_id
+    JOIN consultorios co ON co.id=pr.consultorio_id
+    WHERE pr.id=? AND pr.eliminado_en IS NULL`).get(quoteId);
+  if (!quote?.email) return false;
+  const items = db.prepare(`SELECT nombre, cantidad, precio_bs, detalle FROM presupuesto_items
+    WHERE presupuesto_id=? AND eliminado_en IS NULL ORDER BY posicion,id`).all(quoteId)
+    .map((row) => {
+      let detail = [];
+      try { detail = row.detalle ? JSON.parse(row.detalle) : []; } catch { detail = []; }
+      return { ...row, detalle: detail };
+    });
+  const summary = db.prepare(`SELECT
+      COALESCE(SUM(CASE WHEN total_bs IS NULL THEN 0 ELSE total_bs END), 0) total_bs,
+      COALESCE(SUM(CASE WHEN total_bs IS NULL THEN 1 ELSE 0 END), 0) sin_precio
+    FROM presupuesto_items WHERE presupuesto_id=? AND eliminado_en IS NULL`).get(quoteId);
+  const pago = db.prepare(`SELECT COALESCE(SUM(monto_bs),0) pagado_bs FROM pagos
+    WHERE presupuesto_id=? AND estado='valido' AND eliminado_en IS NULL`).get(quoteId);
+  const saldo = Math.max(0, Number(summary.total_bs || 0) - Number(pago.pagado_bs || 0));
+  const patientName = `${quote.nombres} ${quote.apellidos}`.trim();
+  const quoteUrl = `${config.clientUrl}/cotizacion/${quote.token_publico}`;
+  const mail = buildQuoteMail({
+    clinic: quote,
+    patientName,
+    subject: `Tu cotización - ${quote.marca_nombre || quote.nombre}`,
+    heading: quote.titulo || 'Tu plan de tratamiento',
+    items,
+    resumen: summary,
+    pago: { pagado_bs: Number(pago.pagado_bs || 0), saldo_bs: saldo },
+    quoteUrl,
+    created: quote.creado_en
+  });
+  return sendEmail({ to: quote.email, ...mail }, { consultorioId: quote.consultorio_id, tipo: 'cotizacion' });
 }

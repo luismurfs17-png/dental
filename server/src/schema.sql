@@ -197,6 +197,8 @@ CREATE TABLE IF NOT EXISTS presupuesto_items (
   precio_bs REAL CHECK (precio_bs IS NULL OR precio_bs >= 0),
   duracion_min INTEGER CHECK (duracion_min IS NULL OR duracion_min > 0),
   notas TEXT,
+  detalle TEXT,
+  total_bs REAL CHECK (total_bs IS NULL OR total_bs >= 0),
   posicion INTEGER NOT NULL DEFAULT 0,
   creado_en TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
   eliminado_en TEXT

@@ -796,8 +796,8 @@ test('cotizaciones: servicios del catálogo con o sin precio, edición y aislami
     paciente_id: patientId,
     titulo: 'Plan integral',
     items: [
-      { servicio_id: fixture.serviceId, cantidad: 2, precio_bs: 120 },
-      { servicio_id: extraServiceId },
+      { servicio_id: fixture.serviceId, cantidad: 2, precio_bs: 120, detalle: [{ nombre: 'Fierros', precio_bs: 60 }] },
+      { servicio_id: extraServiceId, detalle: [{ nombre: 'Placa', precio_bs: 100 }, { nombre: 'Material', precio_bs: 40 }] },
       { nombre: 'Férula de descarga', cantidad: 1, duracion_min: 45 },
     ],
   }).expect(201);
@@ -811,10 +811,14 @@ test('cotizaciones: servicios del catálogo con o sin precio, edición y aislami
   assert.equal(priced.nombre, 'Integration Service');
   assert.equal(priced.cantidad, 2);
   assert.equal(priced.precio_bs, 120);
+  assert.equal(priced.total_bs, 300, 'precio por cantidad más partidas');
+  assert.deepEqual(priced.detalle, [{ nombre: 'Fierros', precio_bs: 60 }]);
   const unpriced = detail.body.presupuesto.items.find((item) => item.servicio_id === extraServiceId);
   assert.equal(unpriced.precio_bs, null);
-  assert.equal(detail.body.presupuesto.resumen.total_bs, 240);
-  assert.equal(detail.body.presupuesto.resumen.sin_precio, 2);
+  assert.equal(unpriced.total_bs, 140, 'partidas suman aunque no haya precio base');
+  assert.equal(unpriced.detalle.length, 2);
+  assert.equal(detail.body.presupuesto.resumen.total_bs, 440);
+  assert.equal(detail.body.presupuesto.resumen.sin_precio, 1);
 
   await doctor.patch(`/api/presupuestos/${quoteId}/estado`).send({ estado: 'entregado' }).expect(200);
   await doctor.patch(`/api/presupuestos/${quoteId}/estado`).send({ estado: 'aceptado' }).expect(200);
@@ -834,6 +838,12 @@ test('cotizaciones: servicios del catálogo con o sin precio, edición y aislami
   await doctor.post('/api/presupuestos').send({ paciente_id: patientId, items: [] }).expect(400);
   await doctor.post('/api/presupuestos').send({ paciente_id: patientId }).expect(400);
   await doctor.post('/api/presupuestos').send({ paciente_id: fixture.foreignPatientId, items: [{ nombre: 'X' }] }).expect(404);
+  await doctor.post('/api/presupuestos').send({ paciente_id: patientId, items: [{ nombre: 'X', detalle: [{ nombre: '', precio_bs: 10 }] }] }).expect(400);
+  await doctor.post('/api/presupuestos').send({ paciente_id: patientId, items: [{ nombre: 'X', detalle: [{ nombre: 'Partida', precio_bs: -5 }] }] }).expect(400);
+  await doctor.post('/api/presupuestos').send({ paciente_id: patientId, items: [{ nombre: 'X', detalle: new Array(26).fill({ nombre: 'P', precio_bs: 1 }) }] }).expect(400);
+  await doctor.post(`/api/presupuestos/${quoteId}/enviar`).expect(400).expect((res) => {
+    assert.match(res.body.mensaje, /no tiene un correo/i, 'sin correo del paciente no se puede enviar');
+  });
 
   const list = await doctor.get('/api/presupuestos').query({ paciente_id: patientId, estado: 'aceptado' }).expect(200);
   assert.ok(list.body.presupuestos.some((quote) => quote.id === quoteId));
@@ -867,7 +877,7 @@ test('cotizaciones: enlace público, borrador oculto, estado entregado visible y
   const created = await doctor.post('/api/presupuestos').send({
     paciente_id: patientId,
     titulo: 'Plan compartido',
-    items: [{ nombre: 'Blanqueamiento', cantidad: 1, precio_bs: 350, duracion_min: 60 }],
+    items: [{ nombre: 'Blanqueamiento', cantidad: 1, precio_bs: 350, duracion_min: 60, detalle: [{ nombre: 'Gel de pulido', precio_bs: 50 }] }],
   }).expect(201);
   let quoteId = created.body.id;
 
@@ -890,7 +900,9 @@ test('cotizaciones: enlace público, borrador oculto, estado entregado visible y
   assert.equal(pub.body.consultorio.nombre, 'Integration Clinic');
   assert.equal(pub.body.cotizacion.estado, 'entregado');
   assert.equal(pub.body.cotizacion.items.length, 1);
-  assert.equal(pub.body.cotizacion.total_bs, 350);
+  assert.equal(pub.body.cotizacion.total_bs, 400);
+  assert.deepEqual(pub.body.cotizacion.items[0].detalle, [{ nombre: 'Gel de pulido', precio_bs: 50 }]);
+  assert.equal(pub.body.cotizacion.items[0].total_bs, 400);
   assert.ok(db.prepare('SELECT visto_en FROM presupuestos WHERE id=?').get(quoteId).visto_en, 'primer visto marca visto_en');
   assert.ok(db.prepare(`SELECT id FROM auditoria WHERE entidad_tipo='presupuesto' AND entidad_id=? AND accion='presupuesto_publico_visto'`).get(quoteId), 'audita el primer visto');
 

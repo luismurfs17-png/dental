@@ -159,3 +159,52 @@ ${lines.map((line) => `<li style="margin:4px 0;">${line}</li>`).join('\n')}
   const text = `${brand.name}\n\nHola ${patientName},\n\n${heading}.\n${lines.map((line) => `- ${line}`).join('\n')}${actionUrl ? `\n\n${actionLabel || 'Abrir'}: ${actionUrl}` : ''}${secondaryUrl ? `\n${secondaryLabel || 'Abrir'}: ${secondaryUrl}` : ''}`;
   return { subject, html, text };
 }
+
+export function buildQuoteMail({ clinic, patientName, subject, heading, items, resumen, pago, quoteUrl, created }) {
+  const brand = clinicBrand(clinic);
+  const rows = items.map((item) => {
+    const quantity = item.cantidad > 1 ? ` ×${item.cantidad}` : '';
+    const parts = (item.detalle || []).map((part) => `
+      <tr>
+        <td style="padding:3px 0 3px 22px;color:#607d8b;font-size:13px;border:0;">· ${part.nombre}</td>
+        <td style="padding:3px 0 3px 10px;color:#607d8b;font-size:13px;text-align:right;border:0;white-space:nowrap;">${formatPrice(part.precio_bs)}</td>
+      </tr>`).join('');
+    const lineTotal = item.precio_bs === null && !(item.detalle || []).length
+      ? 'Se define en la consulta'
+      : formatPrice((item.precio_bs ?? 0) * item.cantidad + (item.detalle || []).reduce((sum, part) => sum + part.precio_bs, 0));
+    return `<tr style="border-top:1px solid #eceff1;">
+      <td style="padding:9px 0 3px 0;"><strong>${item.nombre}</strong><span style="color:#90a4ae;font-weight:normal;">${quantity}</span></td>
+      <td style="padding:9px 0 3px 10px;text-align:right;white-space:nowrap;"><strong>${lineTotal}</strong></td>
+    </tr>${parts}`;
+  }).join('');
+  const totalBlock = `<tr>
+    <td style="padding:12px 0 2px 0;border-top:2px solid ${brand.primary};"><strong>Total cotizado</strong></td>
+    <td style="padding:12px 0 2px 10px;text-align:right;border-top:2px solid ${brand.primary};"><strong style="font-size:19px;color:${brand.primary};">${formatPrice(resumen.total_bs)}</strong></td>
+  </tr>${pago?.pagado_bs > 0 ? `
+  <tr>
+    <td style="padding:4px 0 2px 0;color:#607d8b;font-size:14px;">Pagado a cuenta</td>
+    <td style="padding:4px 0 2px 10px;text-align:right;color:#607d8b;font-size:14px;white-space:nowrap;">${formatPrice(pago.pagado_bs)}</td>
+  </tr>
+  <tr>
+    <td style="padding:4px 0 2px 0;color:#263238;font-size:14px;"><strong>Saldo pendiente</strong></td>
+    <td style="padding:4px 0 2px 10px;text-align:right;color:#263238;font-size:14px;white-space:nowrap;"><strong>${formatPrice(pago.saldo_bs)}</strong></td>
+  </tr>` : ''}`;
+  const sinPrecio = resumen.sin_precio > 0
+    ? `<p style="margin:10px 0 0 0;color:#b45309;font-size:13px;">${resumen.sin_precio} servicio(s) sin precio: se definen en la consulta.</p>` : '';
+  const body = `<h2 style="margin:0 0 14px 0;color:${brand.primary};font-size:20px;">${heading}</h2>
+<p style="margin:0 0 6px 0;">Hola <strong>${patientName}</strong>,</p>
+<p style="margin:0 0 14px 0;color:#607d8b;font-size:14px;">${created ? `Elaborado el ${formatDate(created, false)} por ${brand.name}.` : ''} Revisa el detalle de tu plan de tratamiento:</p>
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="border-collapse:collapse;color:#263238;font-size:14px;line-height:1.4;">
+${rows}
+${totalBlock}
+</table>
+${sinPrecio}
+${quoteUrl ? `<p style="margin:18px 0 0 0;"><a href="${quoteUrl}" style="background:${brand.accent};color:#ffffff;text-decoration:none;padding:10px 18px;border-radius:6px;display:inline-block;font-weight:bold;">Ver mi cotización</a></p>` : ''}`;
+  const html = shell({ brand, clinic, body });
+  const lines = items.map((item) => {
+    const detailLine = (item.detalle || []).map((part) => `${part.nombre}: ${formatPrice(part.precio_bs)}`).join(', ');
+    return `- ${item.nombre}${item.cantidad > 1 ? ` x${item.cantidad}` : ''}${detailLine ? ` (${detailLine})` : ''}`;
+  });
+  const text = `${brand.name}\n\nHola ${patientName},\n\n${heading}.\n\n${lines.join('\n')}\n\nTotal cotizado: ${formatPrice(resumen.total_bs)}${pago?.pagado_bs > 0 ? `\nPagado a cuenta: ${formatPrice(pago.pagado_bs)}\nSaldo pendiente: ${formatPrice(pago.saldo_bs)}` : ''}${quoteUrl ? `\n\nVer mi cotización: ${quoteUrl}` : ''}`;
+  return { subject, html, text };
+}

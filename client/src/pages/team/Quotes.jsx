@@ -15,7 +15,7 @@ const QUOTE_FILTERS = [
 
 let quoteUid = 0
 const nextUid = () => `item-${Date.now()}-${quoteUid++}`
-const emptyItem = () => ({ uid: nextUid(), servicio_id: '', nombre: '', cantidad: '1', precio_bs: '', duracion_min: '', notas: '' })
+const emptyItem = () => ({ uid: nextUid(), servicio_id: '', nombre: '', cantidad: '1', precio_bs: '', duracion_min: '', notas: '', detalle: [] })
 const newQuoteForm = (patientId = '') => ({ paciente_id: patientId, titulo: '', notas: '', items: [emptyItem()] })
 const quoteToForm = (quote) => ({
   paciente_id: String(quote.paciente_id),
@@ -29,16 +29,22 @@ const quoteToForm = (quote) => ({
     precio_bs: item.precio_bs === null || item.precio_bs === undefined ? '' : String(item.precio_bs),
     duracion_min: item.duracion_min === null || item.duracion_min === undefined ? '' : String(item.duracion_min),
     notas: item.notas || '',
+    detalle: (item.detalle || []).map((part) => ({ ...part })),
   })),
 })
 const precioTexto = (value) => (value === null || value === undefined || value === '' ? 'A definir' : formatMoney(value))
 const sinPrecio = (value) => value === null || value === undefined || value === ''
 const toNumberOrUndefined = (value) => (value === '' ? undefined : Number(value))
+const extrasTotal = (item) => (item.detalle || []).reduce((sum, part) => sum + (Number(part.precio_bs) || 0), 0)
+function itemTotal(item) {
+  const price = sinPrecio(item.precio_bs) ? 0 : Number(item.precio_bs || 0)
+  return price * (Number(item.cantidad) || 1) + extrasTotal(item)
+}
 function quoteTotals(items) {
   return items.reduce((acc, item) => {
     const price = sinPrecio(item.precio_bs) ? null : Number(item.precio_bs)
-    const amount = Number(item.cantidad || 1)
-    if (price !== null && Number.isFinite(price)) acc.total += price * amount
+    if (price !== null && Number.isFinite(price)) acc.total += price * (Number(item.cantidad) || 1) + extrasTotal(item)
+    else if (extrasTotal(item) > 0) acc.total += extrasTotal(item)
     else acc.sinPrecio += 1
     return acc
   }, { total: 0, sinPrecio: 0 })
@@ -70,12 +76,32 @@ export function QuoteEditor({ patient, quote, initialPatientId = '', onClose, on
     if (form.items.length <= 1) return
     setForm((current) => ({ ...current, items: current.items.filter((item) => item.uid !== uid) }))
   }
+  const setDetail = (uid, index, patch) => setForm((current) => ({
+    ...current,
+    items: current.items.map((item) => (item.uid === uid
+      ? { ...item, detalle: item.detalle.map((part, partIndex) => (partIndex === index ? { ...part, ...patch } : part)) }
+      : item)),
+  }))
+  function addDetail(uid) {
+    setForm((current) => ({
+      ...current,
+      items: current.items.map((item) => (item.uid === uid ? { ...item, detalle: [...item.detalle, { nombre: '', precio_bs: '' }] } : item)),
+    }))
+  }
+  function removeDetail(uid, index) {
+    setForm((current) => ({
+      ...current,
+      items: current.items.map((item) => (item.uid === uid ? { ...item, detalle: item.detalle.filter((_, partIndex) => partIndex !== index) } : item)),
+    }))
+  }
   async function save(event) {
     event.preventDefault()
     setError('')
     if (!patient && !form.paciente_id) return setError('Selecciona un paciente.')
     if (form.items.some((item) => !item.servicio_id && !String(item.nombre || '').trim()))
       return setError('Cada servicio necesita un nombre o elegir un tratamiento del catálogo.')
+    if (form.items.some((item) => item.detalle.some((part) => !String(part.nombre || '').trim())))
+      return setError('Cada partida detallada necesita un nombre.')
     const payload = {
       paciente_id: patient ? Number(patient.id) : Number(form.paciente_id),
       titulo: form.titulo.trim() || undefined,
@@ -87,6 +113,8 @@ export function QuoteEditor({ patient, quote, initialPatientId = '', onClose, on
         precio_bs: toNumberOrUndefined(item.precio_bs),
         duracion_min: toNumberOrUndefined(item.duracion_min),
         notas: String(item.notas || '').trim() || undefined,
+        detalle: item.detalle.filter((part) => String(part.nombre || '').trim())
+          .map((part) => ({ nombre: String(part.nombre).trim(), precio_bs: Number(part.precio_bs) || 0 })),
       })),
     }
     setBusy(true)
@@ -139,6 +167,19 @@ export function QuoteEditor({ patient, quote, initialPatientId = '', onClose, on
               <label className="quote-mini"><span>Min</span><input type="number" min="1" value={item.duracion_min} onChange={(event) => setItem(item.uid, { duracion_min: event.target.value })} placeholder="—" inputMode="numeric" /></label>
               <input value={item.notas} onChange={(event) => setItem(item.uid, { notas: event.target.value })} placeholder="Nota del servicio" />
               <button type="button" className="icon-button danger" onClick={() => removeItem(item.uid)} disabled={form.items.length <= 1} aria-label="Quitar servicio" title="Quitar servicio"><Icon name="trash" size={15} /></button>
+              <div className="quote-extras">
+                {item.detalle.map((part, index) => (
+                  <div className="quote-extra-row" key={index}>
+                    <input value={part.nombre} onChange={(event) => setDetail(item.uid, index, { nombre: event.target.value })} placeholder="Partida (ej. Fierros, placa, material…)" />
+                    <input type="number" min="0" step="0.01" value={part.precio_bs} onChange={(event) => setDetail(item.uid, index, { precio_bs: event.target.value })} placeholder="Bs" inputMode="decimal" aria-label="Precio de la partida" />
+                    <button type="button" className="icon-button danger" onClick={() => removeDetail(item.uid, index)} aria-label="Quitar partida" title="Quitar partida"><Icon name="trash" size={13} /></button>
+                  </div>
+                ))}
+                <div className="quote-extra-foot">
+                  <button type="button" className="button button-ghost button-small" onClick={() => addDetail(item.uid)}><Icon name="plus" /> Agregar partida</button>
+                  <strong>Subtotal {sinPrecio(item.precio_bs) && !extrasTotal(item) ? 'a definir' : formatMoney(itemTotal(item))}</strong>
+                </div>
+              </div>
             </article>
           ))}
         </div>
@@ -159,6 +200,7 @@ export function QuoteEditor({ patient, quote, initialPatientId = '', onClose, on
 
 export function ShareQuoteModal({ detail, onClose, onShared }) {
   const [copied, setCopied] = useState(false)
+  const [sending, setSending] = useState(false)
   const url = `${window.location.origin}/cotizacion/${detail.public_token}`
   const centro = detail.estado === 'borrador' || detail.estado === 'archivado'
   const telefono = String(detail.telefono || '').replace(/\D/g, '')
@@ -166,7 +208,12 @@ export function ShareQuoteModal({ detail, onClose, onShared }) {
   const total = formatMoney(detail.resumen?.total_bs || 0)
   const price = detail.resumen?.sin_precio > 0 ? `Total publicado: ${total} + servicios por definir.` : `Total cotizado: ${total}.`
   const payment = detail.pago?.pagado_bs > 0 ? ` Pagado a cuenta: ${formatMoney(detail.pago.pagado_bs)}. Saldo: ${formatMoney(detail.pago.saldo_bs)}.` : ''
-  const waLink = `https://wa.me/${waNumber}?text=${encodeURIComponent(`Hola ${detail.nombres}, aquí tienes tu cotización. ${price}${payment} Puedes revisar el detalle aquí: ${url}`)}`
+  const itemLines = (detail.items || []).map((item, index) => {
+    const parts = (item.detalle || []).map((part) => `${part.nombre} ${formatMoney(part.precio_bs)}`).join(', ')
+    const itemPrice = item.precio_bs === null || item.precio_bs === undefined ? 'a definir' : formatMoney(item.precio_bs)
+    return `${index + 1}. ${item.nombre}${item.cantidad > 1 ? ` x${item.cantidad}` : ''}: ${itemPrice}${parts ? ` (${parts})` : ''}`
+  }).join('\n')
+  const waLink = `https://wa.me/${waNumber}?text=${encodeURIComponent(`Hola ${detail.nombres}, aquí tienes tu cotización:\n\n${itemLines}\n\n${price}${payment}\nPuedes revisar el detalle aquí: ${url}`)}`
 
   async function copy() {
     try {
@@ -175,6 +222,18 @@ export function ShareQuoteModal({ detail, onClose, onShared }) {
       setTimeout(() => setCopied(false), 2500)
     } catch {
       onShared('No se pudo copiar el enlace.')
+    }
+  }
+  async function sendEmail() {
+    setSending(true)
+    try {
+      await api(`/presupuestos/${detail.id}/enviar`, { method: 'POST' })
+      onShared('Cotización enviada por correo al paciente.')
+      onClose()
+    } catch (requestError) {
+      onShared(requestError.message)
+    } finally {
+      setSending(false)
     }
   }
 
@@ -193,6 +252,7 @@ export function ShareQuoteModal({ detail, onClose, onShared }) {
             <Icon name="whatsapp" /> Enviar por WhatsApp
           </a>
           {!waNumber && <p className="form-error">El paciente no tiene un número de WhatsApp registrado.</p>}
+          <button className="button button-ghost" onClick={sendEmail} disabled={sending || centro}><Icon name="email" /> {sending ? 'Enviando…' : 'Enviar por correo'}</button>
           <button className="button button-ghost" onClick={onClose}>Cerrar</button>
         </div>
       </div>
@@ -329,9 +389,17 @@ export default function Quotes() {
               <div className="quote-items readonly">
                 {detail.items.map((item) => (
                   <article className="quote-item" key={item.id}>
-                    <div className="quote-item-name"><strong>{item.nombre}</strong>{item.notas && <small>{item.notas}</small>}</div>
+                    <div className="quote-item-name"><strong>{item.nombre}</strong>{item.notas && <small>{item.notas}</small>}
+                      {item.detalle?.length > 0 && (
+                        <small className="quote-item-parts">
+                          {item.detalle.map((part, index) => (
+                            <span key={index}>{part.nombre} · {formatMoney(part.precio_bs)}</span>
+                          ))}
+                        </small>
+                      )}
+                    </div>
                     <span className="quote-item-qty">{item.cantidad > 1 ? `×${item.cantidad}` : ''}</span>
-                    <strong>{precioTexto(item.precio_bs)}</strong>
+                    <strong>{item.total_bs === null || item.total_bs === undefined ? (item.detalle?.length ? formatMoney(extrasTotal(item)) : 'A definir') : formatMoney(item.total_bs)}</strong>
                   </article>
                 ))}
               </div>
