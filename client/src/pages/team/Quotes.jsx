@@ -325,7 +325,7 @@ export default function Quotes() {
   }
 
   return (
-    <>
+    <div className="quotes-page">
       <PageHeader
         eyebrow="PLAN DE TRATAMIENTO"
         title="Cotizaciones"
@@ -444,6 +444,6 @@ export default function Quotes() {
       )}
       {sharing && detail && <ShareQuoteModal detail={detail} onClose={() => setSharing(false)} onShared={setMessage} />}
       <Toast message={message} onClose={() => setMessage('')} />
-    </>
+    </div>
   )
 }
