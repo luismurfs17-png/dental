@@ -1065,3 +1065,60 @@ test('mantenimiento: conserva archivos de marca y limpia uploads huérfanos', as
     db.prepare('DELETE FROM auditoria WHERE id IN (?, ?)').run(oldAudit, newAudit);
   }
 });
+
+test('runBackup genera snapshot global y ZIP por consultorio con retención', async () => {
+  const { runBackup, clinicSnapshotsDir, pruneClinicSnapshots } = await import('../src/backup.js');
+  const root = clinicSnapshotsDir();
+  fs.rmSync(root, { recursive: true, force: true });
+  try {
+    const result = await runBackup();
+    assert.ok(result.snapshot.includes('sonrident-'));
+    assert.ok(result.clinicas.length >= 2, 'debe crear un ZIP por cada consultorio activo');
+
+    const folder = path.join(root, `consultorio-${fixture.clinicId}`);
+    const zips = fs.readdirSync(folder).filter((name) => name.endsWith('.zip'));
+    assert.equal(zips.length, 1);
+    assert.match(zips[0], /^consultorio-\d+-\d{4}-\d{2}-\d{2}\.zip$/);
+    assert.ok(fs.statSync(path.join(folder, zips[0])).size > 0, 'el ZIP no debe estar vacío');
+
+    for (let i = 1; i <= 4; i++) {
+      fs.writeFileSync(path.join(folder, `consultorio-${fixture.clinicId}-2026-08-0${i}.zip`), 'x');
+    }
+    const deleted = pruneClinicSnapshots(3);
+    assert.ok(deleted >= 1);
+    assert.equal(fs.readdirSync(folder).filter((name) => name.endsWith('.zip')).length, 3);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('superadmin lista y descarga backups por consultorio', async () => {
+  const { runBackup, clinicSnapshotsDir } = await import('../src/backup.js');
+  const root = clinicSnapshotsDir();
+  fs.rmSync(root, { recursive: true, force: true });
+  const admin = request.agent(app);
+  await admin.post('/api/auth/desarrollo').send({ email: 'admin@test.local' }).expect(200);
+  try {
+    await runBackup();
+
+    const listing = await admin.get('/api/admin/backups').expect(200);
+    const entry = listing.body.backups.find((item) => item.consultorio_id === fixture.clinicId);
+    assert.ok(entry, 'la clínica debe aparecer en el listado');
+    assert.equal(entry.snapshots.length, 1);
+    assert.ok(entry.snapshots[0].bytes > 0);
+
+    const download = await admin.get(`/api/admin/backups/consultorio-${fixture.clinicId}/${entry.snapshots[0].archivo}`)
+      .parse((res, callback) => {
+        const chunks = [];
+        res.on('data', (chunk) => chunks.push(chunk));
+        res.on('end', () => callback(null, Buffer.concat(chunks)));
+      }).expect(200);
+    assert.match(download.headers['content-type'], /application\/zip/);
+    assert.ok(Buffer.isBuffer(download.body) && download.body.length > 0);
+
+    await admin.get(`/api/admin/backups/consultorio-${fixture.clinicId}/..%2F..%2Fdentista.sqlite`).expect(400);
+    await admin.get(`/api/admin/backups/consultorio-${fixture.clinicId}/consultorio-999-2026-01-01.zip`).expect(404);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});

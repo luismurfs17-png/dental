@@ -56,6 +56,7 @@
 - (Opcionales posteriores): recordatorio manual de saldo desde Cobros, correo de cotización con enlace público (`compartido_en`), seguimiento post-consulta con encuesta, botón "Confirmar asistencia" (tokens firmados + endpoints públicos), recuperación de pacientes inactivos, alerta de agenda llena.
 
 ### 3.3 Menores
+- ✅ **Backup por consultorio** (17/08/2026): cron diario genera ZIP por clínica en `/app/data/backups/consultorios/consultorio-<id>/` (retención 3 por clínica, `BACKUP_POR_CONSULTORIO` default `true`); el superadmin lista y descarga desde el panel (`GET /api/admin/backups`). Lógica extraída a `server/src/exporter.js`.
 - Página pública `/privacidad` (política de privacidad) — Google Cloud la pide para publicar (aquí no fue bloqueante) y da confianza a invitados.
 - Google Cloud: **quitar la URI OAuth del dominio viejo** `sonrident` (ya aprobado, app publicada).
 - Dokploy: **desactivar Auto Deploy** (Settings → General → toggle) para que el usuario decida cuándo desplegar (está en el panel; el usuario lo revisará).

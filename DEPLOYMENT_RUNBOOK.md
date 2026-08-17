@@ -157,8 +157,16 @@ La app genera snapshots WAL-safe dentro de `data/backups/<etiqueta>-<fecha>/`:
 `dentista.sqlite` (con `db.backup()`) más una copia de `uploads/`. Cada reinicio
 a cero de un consultorio también guarda un snapshot previo.
 
+Además, con `BACKUP_POR_CONSULTORIO` activo (por defecto `true`), el cron diario
+genera un ZIP por consultorio (`index.json` con todas las tablas + `index.html` +
+archivos adjuntos) en `data/backups/consultorios/consultorio-<id>/`. El
+superadmin puede listar y descargar esos ZIPs en el panel (`/api/admin/backups`
+y `/api/admin/backups/consultorio-<id>/<archivo>`). Se conservan los
+`BACKUP_RETENTION_LOCAL` últimos por clínica.
+
 - Variables: `BACKUP_ENABLED` (por defecto `false`), `BACKUP_CRON`
-  (`0 3 * * *`), `BACKUP_RETENTION_LOCAL` (3 snapshots, eliminando los viejos).
+  (`0 3 * * *`), `BACKUP_RETENTION_LOCAL` (3 snapshots, eliminando los viejos),
+  `BACKUP_POR_CONSULTORIO` (`true` por defecto; `false` para desactivarlo).
 - Mantener la retención local pequeña: la copia duradera es el backup externo
   (Restic→S3) que programa Dokploy sobre el volumen. Probar la restauración
   reemplazando `/app/data/dentista.sqlite` y `uploads/` y reiniciando el

@@ -21,6 +21,7 @@ export default function AdminPanel() {
   const resumenRemote = useRemote('/admin/resumen')
   const clinicsRemote = useRemote('/admin/consultorios')
   const usersRemote = useRemote('/admin/usuarios')
+  const backupsRemote = useRemote('/admin/backups')
   const [invite, setInvite] = useState({ email: '', nombre: '' })
   const [stateFilter, setStateFilter] = useState('')
   const [search, setSearch] = useState('')
@@ -29,10 +30,12 @@ export default function AdminPanel() {
   const [detail, setDetail] = useState(null)
   const [resetting, setResetting] = useState(null)
   const [busyId, setBusyId] = useState(null)
+  const [backupClinicId, setBackupClinicId] = useState('')
+  const [busyBackup, setBusyBackup] = useState(null)
 
-  if (resumenRemote.loading || clinicsRemote.loading || usersRemote.loading) return <Loading label="Cargando el centro de control" />
-  if (resumenRemote.error || clinicsRemote.error || usersRemote.error) {
-    return <ErrorState message={resumenRemote.error || clinicsRemote.error || usersRemote.error} onRetry={() => { resumenRemote.reload(); clinicsRemote.reload(); usersRemote.reload() }} />
+  if (resumenRemote.loading || clinicsRemote.loading || usersRemote.loading || backupsRemote.loading) return <Loading label="Cargando el centro de control" />
+  if (resumenRemote.error || clinicsRemote.error || usersRemote.error || backupsRemote.error) {
+    return <ErrorState message={resumenRemote.error || clinicsRemote.error || usersRemote.error || backupsRemote.error} onRetry={() => { resumenRemote.reload(); clinicsRemote.reload(); usersRemote.reload(); backupsRemote.reload() }} />
   }
 
   const resumen = resumenRemote.data?.resumen || {}
@@ -41,9 +44,33 @@ export default function AdminPanel() {
   const users = unwrap(usersRemote.data, 'usuarios').filter((user) =>
     (!stateFilter || user.estado === stateFilter)
     && (!term || user.email.toLowerCase().includes(term) || user.nombre.toLowerCase().includes(term) || (user.consultorio || '').toLowerCase().includes(term)))
+  const backups = unwrap(backupsRemote.data, 'backups')
 
   async function reloadAll() {
-    resumenRemote.reload(); clinicsRemote.reload(); usersRemote.reload()
+    resumenRemote.reload(); clinicsRemote.reload(); usersRemote.reload(); backupsRemote.reload()
+  }
+
+  function formatBytes(bytes) {
+    if (!bytes && bytes !== 0) return ''
+    if (bytes < 1024) return `${bytes} B`
+    if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
+    return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
+  }
+
+  async function downloadBackup(clinicId, archivo) {
+    setBusyBackup(archivo)
+    try {
+      const response = await fetch(`/api/admin/backups/consultorio-${clinicId}/${archivo}`, { credentials: 'include' })
+      if (!response.ok) throw new Error('No se pudo descargar el backup')
+      const blob = await response.blob()
+      const url = URL.createObjectURL(blob)
+      const anchor = document.createElement('a')
+      anchor.href = url
+      anchor.download = archivo
+      document.body.appendChild(anchor); anchor.click(); anchor.remove()
+      URL.revokeObjectURL(url)
+      setMessage('Backup descargado.')
+    } catch (error) { setMessage(error.message) } finally { setBusyBackup(null) }
   }
 
   async function sendInvite(event) {
@@ -179,6 +206,31 @@ export default function AdminPanel() {
           </div>
         </article>
       ))}</div> : <EmptyState icon="users" title="Sin resultados" text="Ajusta los filtros o invita un correo nuevo." />}
+    </section>
+
+    <section className="settings-card admin-backups-card">
+      <div className="settings-card-head"><span><Icon name="download" /></span><div><h2>Backups por consultorio</h2><p>Snapshots ZIP diarios de cada clínica (se conservan los 3 últimos). Descárgalos cuando necesites una copia.</p></div></div>
+      <div className="filter-row admin-filters">
+        <select value={backupClinicId} onChange={(e) => setBackupClinicId(e.target.value)} aria-label="Elegir consultorio">
+          <option value="">Elegir consultorio…</option>
+          {backups.map((backup) => <option key={backup.consultorio_id} value={backup.consultorio_id}>{backup.consultorio}</option>)}
+        </select>
+      </div>
+      {backupClinicId ? (() => {
+        const entry = backups.find((backup) => backup.consultorio_id === Number(backupClinicId))
+        if (!entry?.snapshots?.length) return <EmptyState icon="download" title="Sin backups" text="Los ZIP se generan con el cron diario de las 03:00. Vuelve mañana." />
+        return <div className="admin-list">{entry.snapshots.map((snapshot) => (
+          <article key={snapshot.archivo}>
+            <div>
+              <strong>{snapshot.fecha}</strong>
+              <small>{snapshot.archivo} · {formatBytes(snapshot.bytes)}</small>
+            </div>
+            <div className="row-actions">
+              <button onClick={() => downloadBackup(entry.consultorio_id, snapshot.archivo)} disabled={busyBackup === snapshot.archivo} aria-label={`Descargar ${snapshot.archivo}`} title="Descargar ZIP"><Icon name="download" /></button>
+            </div>
+          </article>
+        ))}</div>
+      })() : <EmptyState icon="download" title="Elige una clínica" text="Selecciona un consultorio para ver sus copias de seguridad." />}
     </section>
 
     {detail && (

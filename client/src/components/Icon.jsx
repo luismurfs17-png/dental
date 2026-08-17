@@ -29,6 +29,7 @@ const paths = {
   chevronRight: '<path d="m9 18 6-6-6-6"/>',
   qr: '<path d="M3 3h7v7H3zM14 3h7v7h-7zM3 14h7v7H3zM14 14h3v3h-3zM18 18h3v3h-3zM18 13h3v3h-3zM13 18h3v3h-3z"/>',
   history: '<path d="M3 12a9 9 0 1 0 3-6.7L3 8"/><path d="M3 3v5h5M12 7v5l3 2"/>',
+  download: '<path d="M12 4v11M7 10l5 5 5-5M4 20h16"/>',
 }
 
 export default function Icon({ name, size = 20, className = '' }) {

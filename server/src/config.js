@@ -36,7 +36,8 @@ export const config = {
     enabled: process.env.BACKUP_ENABLED === 'true',
     cron: process.env.BACKUP_CRON || '0 3 * * *',
     retention: Math.max(1, Number(process.env.BACKUP_RETENTION_LOCAL || 3)),
-    dirName: 'backups'
+    dirName: 'backups',
+    porConsultorio: process.env.BACKUP_POR_CONSULTORIO !== 'false'
   },
   maintenance: {
     cron: process.env.MAINTENANCE_CRON || '0 4 * * 0',
