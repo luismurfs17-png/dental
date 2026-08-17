@@ -12,6 +12,28 @@ function anyEmailConfigured() {
     ) LIMIT 1`).get());
 }
 
+export function dueReminderRows(now = new Date()) {
+  const nowIso = now.toISOString();
+  return db.prepare(`SELECT c.id, c.consultorio_id, p.email
+    FROM citas c
+    JOIN pacientes p ON p.id = c.paciente_id AND p.consultorio_id = c.consultorio_id
+    JOIN consultorios co ON co.id = c.consultorio_id AND co.eliminado_en IS NULL
+    LEFT JOIN email_recordatorios er ON er.cita_id = c.id AND er.consultorio_id = c.consultorio_id
+      AND er.destinatario = p.email AND er.estado = 'enviado'
+    WHERE c.estado = 'confirmada' AND c.eliminado_en IS NULL AND p.eliminado_en IS NULL
+      AND p.email IS NOT NULL AND p.recordatorios_activos = 1 AND er.id IS NULL
+      AND datetime(c.inicio) > datetime(?)
+      AND (
+        (co.recordatorio_horas IS NULL AND datetime(?) >= CASE
+          WHEN strftime('%H', c.inicio) >= '16' THEN datetime(date(c.inicio) || ' 12:00:00')
+          ELSE datetime(date(c.inicio) || ' 00:00:00')
+        END)
+        OR
+        (co.recordatorio_horas IS NOT NULL
+          AND datetime(c.inicio) <= datetime(?, '+' || co.recordatorio_horas || ' hours'))
+      )`).all(nowIso, nowIso, nowIso);
+}
+
 export function startReminders() {
   if (!anyEmailConfigured()) {
     console.log('Recordatorios por correo desactivados: sin SMTP global ni correos de consultorios configurados');
@@ -22,25 +44,7 @@ export function startReminders() {
     return null;
   }
   return cron.schedule(config.smtp.cron, async () => {
-    const rows = db.prepare(`SELECT c.id, c.consultorio_id, p.email
-      FROM citas c
-      JOIN pacientes p ON p.id = c.paciente_id AND p.consultorio_id = c.consultorio_id
-      JOIN consultorios co ON co.id = c.consultorio_id AND co.eliminado_en IS NULL
-      LEFT JOIN email_recordatorios er ON er.cita_id = c.id AND er.consultorio_id = c.consultorio_id
-        AND er.destinatario = p.email AND er.estado = 'enviado'
-      WHERE c.estado = 'confirmada' AND c.eliminado_en IS NULL AND p.eliminado_en IS NULL
-        AND p.email IS NOT NULL AND p.recordatorios_activos = 1 AND er.id IS NULL
-        AND datetime(c.inicio) > datetime('now')
-        AND (
-          (co.recordatorio_horas IS NULL AND datetime('now') >= CASE
-            WHEN strftime('%H', c.inicio) >= '12' THEN datetime(date(c.inicio) || ' 08:00:00')
-            ELSE datetime(date(c.inicio, '-1 day') || ' 20:00:00')
-          END)
-          OR
-          (co.recordatorio_horas IS NOT NULL
-            AND datetime(c.inicio) <= datetime('now', '+' || co.recordatorio_horas || ' hours'))
-        )`)
-      .all(`+${config.smtp.hours} hours`);
+    const rows = dueReminderRows();
     for (const row of rows) {
       try {
         const sent = await sendReminderEmail(row.id);

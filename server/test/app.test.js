@@ -7,6 +7,7 @@ import jwt from 'jsonwebtoken';
 import { app } from '../src/app.js';
 import { db, uniqueClinicSlug } from '../src/db.js';
 import { config } from '../src/config.js';
+import { dueReminderRows } from '../src/reminders.js';
 
 process.env.SUPERADMIN_EMAILS = 'admin@test.local';
 
@@ -916,6 +917,38 @@ test('cotizaciones: enlace público, borrador oculto, estado entregado visible y
   await doctor.patch(`/api/presupuestos/${quoteId}/estado`).send({ estado: 'archivado' }).expect(200);
   await request(app).get(`/api/presupuestos/publico/${token}`).expect(404);
   await request(app).get(`/api/presupuestos/publico/token-inventado-1234567890`).expect(404);
+});
+
+test('recordatorios: horario inteligente respeta la hora local de La Paz y las horas fijas', () => {
+  const clinicId = fixture.clinicId;
+  const patientId = Number(db.prepare(`INSERT INTO pacientes (consultorio_id,codigo,nombres,apellidos,email)
+    VALUES (?,?,?,?,?)`).run(clinicId, `9${Date.now()}`, 'Recordatorio', 'Paciente', `recordatorio-${Date.now()}@test.local`).lastInsertRowid);
+  db.prepare(`UPDATE consultorios SET recordatorio_horas=NULL WHERE id=?`).run(clinicId);
+  db.prepare(`DELETE FROM email_recordatorios WHERE cita_id IN (SELECT id FROM citas WHERE motivo='REMINDER-TEST')`).run();
+  db.prepare(`DELETE FROM citas WHERE consultorio_id=? AND motivo='REMINDER-TEST'`).run(clinicId);
+  const insertCita = db.prepare(`INSERT INTO citas (consultorio_id,paciente_id,doctor_id,servicio_id,inicio,fin,estado,motivo,creado_por)
+    VALUES (?,?,?,?,?,?,'confirmada','REMINDER-TEST',?)`);
+  const morningId = Number(insertCita.run(clinicId, patientId, fixture.doctorId, fixture.serviceId,
+    '2030-05-20T12:30:00.000Z', '2030-05-20T13:00:00.000Z', fixture.doctorId).lastInsertRowid);
+  const afternoonId = Number(insertCita.run(clinicId, patientId, fixture.doctorId, fixture.serviceId,
+    '2030-05-20T21:00:00.000Z', '2030-05-20T21:30:00.000Z', fixture.doctorId).lastInsertRowid);
+  const dueAt = (iso) => dueReminderRows(new Date(iso)).map((row) => row.id).sort();
+
+  assert.deepEqual(dueAt('2030-05-19T23:59:59.000Z'), [], 'antes de las 20:00 local del día previo no hay aviso');
+  assert.deepEqual(dueAt('2030-05-20T00:00:00.000Z'), [morningId], '20:00 local del día previo activa la cita de la mañana');
+  assert.deepEqual(dueAt('2030-05-20T11:59:59.000Z'), [morningId], 'la cita de la mañana sigue pendiente en su ventana');
+  assert.deepEqual(dueAt('2030-05-20T12:00:00.000Z'), [morningId, afternoonId], '08:00 local del mismo día activa la cita de la tarde');
+
+  db.prepare(`UPDATE consultorios SET recordatorio_horas=8 WHERE id=?`).run(clinicId);
+  try {
+    assert.deepEqual(dueAt('2030-05-20T05:00:00.000Z'), [morningId], 'horas fijas: la cita de la mañana entra 8 horas antes');
+    assert.deepEqual(dueAt('2030-05-20T12:59:59.000Z'), [], 'horas fijas: la cita de la tarde aún no entra en ventana');
+    assert.deepEqual(dueAt('2030-05-20T13:00:00.000Z'), [afternoonId], 'horas fijas: la cita de la tarde entra 8 horas antes');
+  } finally {
+    db.prepare(`UPDATE consultorios SET recordatorio_horas=NULL WHERE id=?`).run(clinicId);
+  }
+  db.prepare(`DELETE FROM citas WHERE id IN (?,?)`).run(morningId, afternoonId);
+  db.prepare('DELETE FROM pacientes WHERE id=?').run(patientId);
 });
 
 test('eliminar un consultorio revoca sesión y cotizaciones públicas', async (t) => {
