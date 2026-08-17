@@ -1,4 +1,5 @@
 import { useMemo, useState } from 'react'
+import { useNavigate } from 'react-router-dom'
 import { formatDate, formatTime, unwrap } from '../../lib/api.js'
 import { useRemote } from '../../hooks/useRemote.js'
 import { EmptyState, ErrorState, Field, Loading, Modal, PageHeader } from '../../components/UI.jsx'
@@ -12,6 +13,7 @@ const ACTIONS = [
 ]
 
 export default function Audit() {
+  const navigate = useNavigate()
   const usersRemote = useRemote('/usuarios')
   const patientsRemote = useRemote('/pacientes')
   const [filters, setFilters] = useState(EMPTY_FILTERS)
@@ -49,7 +51,7 @@ export default function Audit() {
       <div className="audit-filter-actions"><button className="button button-primary" type="submit">Aplicar</button><button className="button button-ghost" type="button" onClick={clear}>Limpiar</button></div>
     </form>
     {auditRemote.loading ? <Loading label="Consultando actividad" /> : auditRemote.error ? <ErrorState message={auditRemote.error} onRetry={auditRemote.reload} /> : rows.length ? <>
-      <div className="audit-table-scroll" tabIndex="0" aria-label="Registro de auditoría, desplácese horizontalmente"><div className="audit-table"><div className="audit-table-head"><span>Fecha / hora</span><span>Usuario</span><span>Acción</span><span>Entidad</span><span>Paciente</span><span>IP / detalles</span></div>{rows.map((row) => { const patient = patientFor(row, patients); return <button className="audit-row" type="button" key={row.id} onClick={() => setSelected(row)}><span><strong>{formatDate(row.creado_en)}</strong><small>{formatTime(row.creado_en)}</small></span><span><strong>{row.usuario || 'Sistema'}</strong><small>#{row.usuario_id || 'N/A'}</small></span><span className="audit-action">{actionLabel(row.accion)}</span><span><strong>{row.entidad_tipo || 'Sin entidad'}</strong><small>#{row.entidad_id || 'N/A'}</small></span><span>{patient ? <><strong className="patient-code">{patient.codigo}</strong><small>{patient.nombres} {patient.apellidos}</small></> : <small>Sin paciente asociado</small>}</span><span><strong>{row.ip || 'No registrada'}</strong><small>Ver datos</small></span></button> })}</div></div>
+      <div className="audit-table-scroll" tabIndex="0" aria-label="Registro de auditoría, desplácese horizontalmente"><div className="audit-table"><div className="audit-table-head"><span>Fecha / hora</span><span>Usuario</span><span>Acción</span><span>Entidad</span><span>Paciente</span><span>IP / detalles</span></div>{rows.map((row) => { const patient = patientFor(row, patients); const citaLink = citaAgendaLink(row); return <button className="audit-row" type="button" key={row.id} onClick={() => (citaLink ? navigate(citaLink) : setSelected(row))} title={citaLink ? 'Abrir esta cita en la agenda' : 'Ver detalle'}><span><strong>{formatDate(row.creado_en)}</strong><small>{formatTime(row.creado_en)}</small></span><span><strong>{row.usuario || 'Sistema'}</strong><small>#{row.usuario_id || 'N/A'}</small></span><span className="audit-action">{actionLabel(row.accion)}</span><span><strong>{row.entidad_tipo || 'Sin entidad'}</strong><small>#{row.entidad_id || 'N/A'}</small></span><span>{patient ? <><strong className="patient-code">{patient.codigo}</strong><small>{patient.nombres} {patient.apellidos}</small></> : <small>Sin paciente asociado</small>}</span><span><strong>{row.ip || 'No registrada'}</strong><small>Ver datos</small></span></button> })}</div></div>
       {(Number.isFinite(total) ? rows.length < total : rows.length >= limit) && <div className="load-more"><button className="button button-ghost" onClick={() => setLimit((value) => value + 50)}>Cargar más{Number.isFinite(total) ? ` (${rows.length} de ${total})` : ''}</button></div>}
     </> : <EmptyState icon="history" title="Sin actividad" text="No hay eventos que coincidan con estos filtros." />}
     {selected && <Modal title="Detalle de auditoría" onClose={() => setSelected(null)}><dl className="audit-detail"><div><dt>Acción</dt><dd>{actionLabel(selected.accion)}</dd></div><div><dt>Usuario</dt><dd>{selected.usuario || 'Sistema'}</dd></div><div><dt>Entidad</dt><dd>{selected.entidad_tipo} #{selected.entidad_id || 'N/A'}</dd></div><div><dt>IP</dt><dd>{selected.ip || 'No registrada'}</dd></div></dl><pre className="json-detail">{prettyJson(selected.datos_json)}</pre></Modal>}
@@ -57,6 +59,15 @@ export default function Audit() {
 }
 
 function patientLabel(patient) { return `${patient.codigo || 'S/C'} - ${patient.nombres} ${patient.apellidos}`.trim() }
+function citaAgendaLink(row) {
+  if (row.entidad_tipo !== 'cita' || !row.entidad_id) return null
+  const data = parsedData(row.datos_json)
+  const inicio = data.inicio || data.despues?.inicio || data.antes?.inicio
+  if (!inicio) return `/agenda?cita=${row.entidad_id}`
+  const date = new Date(inicio)
+  const fecha = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`
+  return `/agenda?cita=${row.entidad_id}&fecha=${fecha}`
+}
 function actionLabel(action) { return ACTIONS.find(([value]) => value === action)?.[1] || String(action || 'Sin acción').replaceAll('_', ' ') }
 function parsedData(value) {
   if (value && typeof value === 'object') return value

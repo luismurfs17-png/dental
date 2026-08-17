@@ -1,5 +1,5 @@
-import { useEffect, useState } from "react";
-import { Link } from "react-router-dom";
+import { useEffect, useRef, useState } from "react";
+import { Link, useSearchParams } from "react-router-dom";
 import {
   api,
   formatDate,
@@ -25,6 +25,8 @@ import { emailUrl, whatsappUrl } from "../../lib/contact.js";
 
 export function Agenda() {
   const { user } = useAuth();
+  const [searchParams, setSearchParams] = useSearchParams();
+  const openedFromAudit = useRef(false);
   const clinicName = user?.consultorio?.marca_nombre || user?.consultorio?.nombre || '';
   const [viewMode, setViewMode] = useState('week');
   const [week, setWeek] = useState(() => mondayOf(new Date()));
@@ -50,6 +52,22 @@ export function Agenda() {
   const doctors = unwrap(doctorsRemote.data, "doctores");
   const patients = unwrap(patientsRemote.data, "pacientes");
   const editDate = editing ? String(editing.inicio_local || "").slice(0, 10) : "";
+  const citaParam = searchParams.get("cita");
+  const fechaParam = searchParams.get("fecha");
+  useEffect(() => {
+    if (!fechaParam) return;
+    const date = new Date(`${fechaParam}T12:00:00`);
+    if (!Number.isNaN(date.getTime())) setWeek(mondayOf(date));
+  }, [fechaParam]);
+  useEffect(() => {
+    if (!citaParam || openedFromAudit.current || loading) return;
+    const target = appointments.find((item) => String(item.id) === String(citaParam));
+    if (target) {
+      openedFromAudit.current = true;
+      setSelected(target);
+      setSearchParams({}, { replace: true });
+    }
+  }, [citaParam, appointments, loading, setSearchParams]);
   useEffect(() => {
     if (!editing || !editDate || !editing.servicio_id || !editing.doctor_id) { setEditSlots([]); return; }
     let active = true;
