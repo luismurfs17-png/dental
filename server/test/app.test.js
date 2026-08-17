@@ -1122,3 +1122,44 @@ test('superadmin lista y descarga backups por consultorio', async () => {
     fs.rmSync(root, { recursive: true, force: true });
   }
 });
+
+test('pago parcial contra cotización queda en historial con total, a cuenta y saldo', async () => {
+  const doctor = request.agent(app);
+  await doctor.post('/api/auth/desarrollo').send({ email: 'integration-doctor@test.local' }).expect(200);
+
+  const codigo = `${Date.now()}${Math.floor(Math.random() * 1000).toString().padStart(3, '0')}`;
+  const patient = await doctor.post('/api/pacientes').send({ codigo, nombres: 'Abono', apellidos: 'Parcial' }).expect(201);
+  const patientId = patient.body.paciente.id;
+
+  const quote = await doctor.post('/api/presupuestos').send({
+    paciente_id: patientId,
+    titulo: 'Plan parcial 1000/1100',
+    items: [{ servicio_id: fixture.serviceId, cantidad: 1, precio_bs: 1100 }],
+  }).expect(201);
+  const quoteId = quote.body.id;
+
+  const payment = await doctor.post('/api/pagos').send({
+    paciente_id: patientId, monto_bs: 1000, metodo: 'efectivo', presupuesto_id: quoteId,
+  }).expect(201);
+  assert.equal(payment.body.estado, 'valido');
+
+  const list = await doctor.get('/api/pagos').query({ paciente_id: patientId }).expect(200);
+  const row = list.body.pagos.find((item) => item.id === payment.body.id);
+  assert.equal(row.presupuesto_titulo, 'Plan parcial 1000/1100');
+  assert.equal(row.presupuesto_total, 1100);
+  assert.equal(row.presupuesto_pagado, 1000);
+  assert.equal(row.presupuesto_saldo, 100);
+
+  const quoteList = await doctor.get('/api/presupuestos').query({ paciente_id: patientId }).expect(200);
+  const updated = quoteList.body.presupuestos.find((item) => item.id === quoteId);
+  assert.equal(updated.pago.pagado_bs, 1000);
+  assert.equal(updated.pago.saldo_bs, 100);
+  assert.equal(updated.pago.estado, 'saldo');
+
+  const saldos = await doctor.get('/api/saldos').query({ paciente_id: patientId }).expect(200);
+  assert.equal(saldos.body.saldos[0].pagos_validos_bs, 1000);
+  assert.equal(saldos.body.saldos[0].cobrado_semana_bs, 1000);
+  assert.equal(saldos.body.saldos[0].cobrado_mes_bs, 1000);
+
+  await doctor.delete(`/api/presupuestos/${quoteId}`).expect(200);
+});

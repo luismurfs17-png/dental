@@ -1409,7 +1409,14 @@ router.get('/pagos', (req, res) => {
     WHERE ${conditions.join(' AND ')} ORDER BY pg.creado_en DESC LIMIT 500`).all(...values);
   res.json({ pagos: rows.map((row) => {
     const { evidencia_path: evidencePath, ...payment } = row;
-    return { ...payment, evidencia_url: evidencePath ? `/api/pagos/${row.id}/evidencia` : null };
+    const quote = row.presupuesto_id ? quotePayments(row.presupuesto_id) : null;
+    return {
+      ...payment,
+      evidencia_url: evidencePath ? `/api/pagos/${row.id}/evidencia` : null,
+      presupuesto_total: quote ? quote.total_bs : null,
+      presupuesto_pagado: quote ? quote.pagado_bs : null,
+      presupuesto_saldo: quote ? quote.saldo_bs : null
+    };
   }) });
 });
 router.post('/pagos', upload.single('evidencia'), (req, res, next) => {
@@ -1549,6 +1556,9 @@ router.get('/saldos', (req, res) => {
     restrictPatient(req, id(req.query.paciente_id));
     conditions.push('p.id=?'); values.push(id(req.query.paciente_id));
   }
+  const now = new Date();
+  const weekStart = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() - ((now.getUTCDay() + 6) % 7))).toISOString().slice(0, 19).replace('T', ' ');
+  const monthStart = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1)).toISOString().slice(0, 19).replace('T', ' ');
   const rows = db.prepare(`SELECT p.id paciente_id,p.codigo,p.nombres,p.apellidos,
      COALESCE((SELECT SUM(c.precio_bs) FROM citas c WHERE c.consultorio_id=p.consultorio_id AND c.paciente_id=p.id
        AND c.estado='atendida' AND c.eliminado_en IS NULL),0) cargos_bs,
@@ -1558,6 +1568,10 @@ router.get('/saldos', (req, res) => {
        AND pr.eliminado_en IS NULL AND pi.eliminado_en IS NULL AND pi.total_bs IS NOT NULL),0) cotizaciones_bs,
      COALESCE((SELECT SUM(pg.monto_bs) FROM pagos pg WHERE pg.consultorio_id=p.consultorio_id AND pg.paciente_id=p.id
        AND pg.estado='valido' AND pg.eliminado_en IS NULL),0) pagos_validos_bs,
+     COALESCE((SELECT SUM(pg.monto_bs) FROM pagos pg WHERE pg.consultorio_id=p.consultorio_id AND pg.paciente_id=p.id
+       AND pg.estado='valido' AND pg.eliminado_en IS NULL AND pg.creado_en >= '${weekStart}'),0) cobrado_semana_bs,
+     COALESCE((SELECT SUM(pg.monto_bs) FROM pagos pg WHERE pg.consultorio_id=p.consultorio_id AND pg.paciente_id=p.id
+       AND pg.estado='valido' AND pg.eliminado_en IS NULL AND pg.creado_en >= '${monthStart}'),0) cobrado_mes_bs,
      COALESCE((SELECT SUM(c.precio_bs) FROM citas c WHERE c.consultorio_id=p.consultorio_id AND c.paciente_id=p.id
        AND c.estado='atendida' AND c.eliminado_en IS NULL),0)
      + COALESCE((SELECT SUM(pi.total_bs) FROM presupuesto_items pi
