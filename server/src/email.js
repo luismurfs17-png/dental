@@ -11,6 +11,15 @@ export function smtpConfigured() {
   return Boolean(config.smtp.host && config.smtp.user && config.smtp.pass);
 }
 
+export function correosFuncionActiva(consultorioId) {
+  if (!consultorioId) return true;
+  const row = db.prepare(`SELECT activo, vence_en FROM funciones_consultorio
+    WHERE consultorio_id=? AND funcion='correos_automaticos'`).get(consultorioId);
+  if (!row || !row.activo) return false;
+  if (row.vence_en && new Date(row.vence_en).getTime() <= Date.now()) return false;
+  return true;
+}
+
 export function getClinicEmailConfig(consultorioId) {
   const row = db.prepare(`SELECT modo, oauth_provider, smtp_host, smtp_port, smtp_secure, smtp_user,
       smtp_from, gmail_user, gmail_refresh_token_cifrado, gmail_access_token_cifrado,
@@ -98,6 +107,7 @@ function recordSend({ consultorioId, citaId, destinatario, tipo, estado, error, 
 }
 
 export async function sendEmail(message, { consultorioId = null, citaId = null, tipo = 'general' } = {}) {
+  if (consultorioId && !correosFuncionActiva(consultorioId)) return false;
   const clinicConfig = consultorioId ? getClinicEmailConfig(consultorioId) : null;
   if (!clinicConfig && !smtpConfigured()) return false;
   const { transporter, from } = transporterFor(consultorioId);
@@ -140,15 +150,93 @@ export async function sendAppointmentEmail(appointmentId, type) {
   });
 }
 
-export async function sendReminderEmail(appointmentId) {
+export async function sendReminderEmail(appointmentId, tipo = '24h') {
   const appointment = appointmentForEmail(appointmentId);
   if (!appointment?.email || !appointment.recordatorios_activos) return false;
   const mail = buildReminderMail(appointment);
   return sendEmail({ to: appointment.email, ...mail }, {
     consultorioId: appointment.consultorio_id,
     citaId: appointment.id,
-    tipo: 'recordatorio'
+    tipo: tipo === '2h' ? 'recordatorio_2h' : 'recordatorio'
   });
+}
+
+export function weeklySummaryData(consultorioId) {
+  const now = new Date();
+  const sevenDays = new Date(now.getTime() + 7 * 86400000).toISOString();
+  const weekAgo = new Date(now.getTime() - 7 * 86400000).toISOString();
+  const monthAgo = new Date(now.getTime() - 30 * 86400000).toISOString();
+  const citasProximas = db.prepare(`SELECT COUNT(*) total FROM citas
+    WHERE consultorio_id=? AND estado='confirmada' AND eliminado_en IS NULL
+    AND datetime(inicio) BETWEEN datetime(?) AND datetime(?)`).get(consultorioId, now.toISOString(), sevenDays);
+  const citasAtendidas = db.prepare(`SELECT COUNT(*) total FROM citas
+    WHERE consultorio_id=? AND estado='atendida' AND eliminado_en IS NULL
+    AND datetime(inicio) BETWEEN datetime(?) AND datetime(?)`).get(consultorioId, weekAgo, now.toISOString());
+  const pagosPorVerificar = db.prepare(`SELECT COUNT(*) total FROM pagos
+    WHERE consultorio_id=? AND estado='por_verificar' AND eliminado_en IS NULL`).get(consultorioId);
+  const inactivos = db.prepare(`SELECT COUNT(*) total FROM pacientes p
+    WHERE p.consultorio_id=? AND p.eliminado_en IS NULL
+    AND NOT EXISTS (SELECT 1 FROM citas c WHERE c.consultorio_id=p.consultorio_id AND c.paciente_id=p.id
+      AND c.eliminado_en IS NULL AND c.inicio >= datetime(?))`).get(consultorioId, monthAgo);
+  const saldos = db.prepare(`SELECT COUNT(*) con_saldo,
+      COALESCE(SUM(COALESCE((SELECT SUM(c.precio_bs) FROM citas c WHERE c.consultorio_id=p.consultorio_id AND c.paciente_id=p.id
+        AND c.estado='atendida' AND c.eliminado_en IS NULL),0)
+        + COALESCE((SELECT SUM(pi.total_bs) FROM presupuesto_items pi
+          JOIN presupuestos pr ON pr.id=pi.presupuesto_id AND pr.consultorio_id=p.consultorio_id
+          WHERE pr.paciente_id=p.id AND pr.estado IN ('entregado','aceptado') AND pr.compartido_en IS NOT NULL
+          AND pr.eliminado_en IS NULL AND pi.eliminado_en IS NULL AND pi.total_bs IS NOT NULL),0)
+        - COALESCE((SELECT SUM(pg.monto_bs) FROM pagos pg WHERE pg.consultorio_id=p.consultorio_id AND pg.paciente_id=p.id
+          AND pg.estado='valido' AND pg.eliminado_en IS NULL),0)),0) saldo_bs
+    FROM pacientes p WHERE p.consultorio_id=? AND p.eliminado_en IS NULL
+      AND (COALESCE((SELECT SUM(c.precio_bs) FROM citas c WHERE c.consultorio_id=p.consultorio_id AND c.paciente_id=p.id
+        AND c.estado='atendida' AND c.eliminado_en IS NULL),0)
+        + COALESCE((SELECT SUM(pi.total_bs) FROM presupuesto_items pi
+          JOIN presupuestos pr ON pr.id=pi.presupuesto_id AND pr.consultorio_id=p.consultorio_id
+          WHERE pr.paciente_id=p.id AND pr.estado IN ('entregado','aceptado') AND pr.compartido_en IS NOT NULL
+          AND pr.eliminado_en IS NULL AND pi.eliminado_en IS NULL AND pi.total_bs IS NOT NULL),0)
+        - COALESCE((SELECT SUM(pg.monto_bs) FROM pagos pg WHERE pg.consultorio_id=p.consultorio_id AND pg.paciente_id=p.id
+          AND pg.estado='valido' AND pg.eliminado_en IS NULL),0)) > 0`).get(consultorioId);
+  return {
+    citasProximas: Number(citasProximas.total || 0),
+    citasAtendidas: Number(citasAtendidas.total || 0),
+    pagosPorVerificar: Number(pagosPorVerificar.total || 0),
+    pacientesInactivos: Number(inactivos.total || 0),
+    conSaldo: Number(saldos.con_saldo || 0),
+    saldoBs: Number(saldos.saldo_bs || 0)
+  };
+}
+
+export async function sendWeeklySummaryEmail(consultorioId) {
+  const clinic = db.prepare(`SELECT nombre, marca_nombre, slug FROM consultorios
+    WHERE id=? AND eliminado_en IS NULL`).get(consultorioId);
+  if (!clinic) return false;
+  const doctors = db.prepare(`SELECT email, nombre FROM usuarios
+    WHERE consultorio_id=? AND rol='doctor' AND estado='activo' AND email IS NOT NULL`).all(consultorioId);
+  if (!doctors.length) return false;
+  const data = weeklySummaryData(consultorioId);
+  const lines = [
+    `Citas confirmadas en los próximos 7 días: ${data.citasProximas}.`,
+    `Citas atendidas esta semana: ${data.citasAtendidas}.`,
+    `Pagos por verificar: ${data.pagosPorVerificar}.`,
+    `Pacientes con saldo pendiente: ${data.conSaldo} (Bs ${data.saldoBs.toFixed(2)}).`,
+    `Pacientes sin cita en 30 días: ${data.pacientesInactivos}.`
+  ];
+  let sent = 0;
+  for (const doctor of doctors) {
+    const ok = await sendClinicEmail({
+      consultorioId,
+      to: doctor.email,
+      patientName: doctor.nombre,
+      subject: `Resumen semanal de ${clinic.marca_nombre || clinic.nombre}`,
+      heading: 'Tu semana en números',
+      lines,
+      actionUrl: `${config.clientUrl}/agenda`,
+      actionLabel: 'Abrir la agenda',
+      tipo: 'resumen_semanal'
+    });
+    if (ok) sent += 1;
+  }
+  return sent > 0;
 }
 
 export async function sendClinicEmail({ consultorioId, to, patientName, subject, heading, lines, actionUrl, actionLabel, tipo }) {

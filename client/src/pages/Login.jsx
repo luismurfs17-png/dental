@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { Navigate, useParams, useSearchParams } from 'react-router-dom'
+import { Link, Navigate, useParams, useSearchParams } from 'react-router-dom'
 import { api } from '../lib/api.js'
 import { clinicBrand, clinicTheme, mapsUrl } from '../lib/branding.js'
 import { useAuth } from '../context/AuthContext.jsx'
@@ -128,7 +128,7 @@ export default function Login({ branded = false, installOnly = false, clinicSlug
               <button className="button button-primary" disabled={submitting}>{submitting ? 'Ingresando…' : 'Ingresar con datos semilla'}</button>
             </form>
           ))}
-          <small className="privacy-note">Datos protegidos · Tecnología de CopaApp</small>
+          <small className="privacy-note">Datos protegidos · Tecnología de CopaApp · <Link to="/privacidad">Política de privacidad</Link></small>
         </div>
       </main>
     </div>

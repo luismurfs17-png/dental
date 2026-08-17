@@ -350,7 +350,21 @@ function emailConfigJson(consultorioId) {
     gmail_disponible: Boolean(config.google.clientId && config.google.clientSecret),
     global_activo: Boolean(config.smtp.host && config.smtp.user && config.smtp.pass),
     global_remitente: config.smtp.from || null,
-    correo_consultorio: clinic?.email || null
+    correo_consultorio: clinic?.email || null,
+    prueba: correosPruebaInfo(consultorioId)
+  };
+}
+
+function correosPruebaInfo(consultorioId) {
+  const row = db.prepare(`SELECT activo, vence_en FROM funciones_consultorio
+    WHERE consultorio_id=? AND funcion='correos_automaticos'`).get(consultorioId);
+  if (!row) return { activo: false, vence_en: null, dias_restantes: null };
+  return {
+    activo: Boolean(row.activo) && (!row.vence_en || new Date(row.vence_en).getTime() > Date.now()),
+    vence_en: row.activo ? (row.vence_en || null) : null,
+    dias_restantes: row.activo && row.vence_en
+      ? Math.max(0, Math.ceil((new Date(row.vence_en).getTime() - Date.now()) / 86400000))
+      : null
   };
 }
 

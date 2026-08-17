@@ -22,6 +22,7 @@ export default function AdminPanel() {
   const clinicsRemote = useRemote('/admin/consultorios')
   const usersRemote = useRemote('/admin/usuarios')
   const backupsRemote = useRemote('/admin/backups')
+  const correosRemote = useRemote('/admin/funciones/correos')
   const [invite, setInvite] = useState({ email: '', nombre: '' })
   const [stateFilter, setStateFilter] = useState('')
   const [search, setSearch] = useState('')
@@ -32,10 +33,11 @@ export default function AdminPanel() {
   const [busyId, setBusyId] = useState(null)
   const [backupClinicId, setBackupClinicId] = useState('')
   const [busyBackup, setBusyBackup] = useState(null)
+  const [busyCorreos, setBusyCorreos] = useState(null)
 
-  if (resumenRemote.loading || clinicsRemote.loading || usersRemote.loading || backupsRemote.loading) return <Loading label="Cargando el centro de control" />
-  if (resumenRemote.error || clinicsRemote.error || usersRemote.error || backupsRemote.error) {
-    return <ErrorState message={resumenRemote.error || clinicsRemote.error || usersRemote.error || backupsRemote.error} onRetry={() => { resumenRemote.reload(); clinicsRemote.reload(); usersRemote.reload(); backupsRemote.reload() }} />
+  if (resumenRemote.loading || clinicsRemote.loading || usersRemote.loading || backupsRemote.loading || correosRemote.loading) return <Loading label="Cargando el centro de control" />
+  if (resumenRemote.error || clinicsRemote.error || usersRemote.error || backupsRemote.error || correosRemote.error) {
+    return <ErrorState message={resumenRemote.error || clinicsRemote.error || usersRemote.error || backupsRemote.error || correosRemote.error} onRetry={() => { resumenRemote.reload(); clinicsRemote.reload(); usersRemote.reload(); backupsRemote.reload(); correosRemote.reload() }} />
   }
 
   const resumen = resumenRemote.data?.resumen || {}
@@ -45,9 +47,10 @@ export default function AdminPanel() {
     (!stateFilter || user.estado === stateFilter)
     && (!term || user.email.toLowerCase().includes(term) || user.nombre.toLowerCase().includes(term) || (user.consultorio || '').toLowerCase().includes(term)))
   const backups = unwrap(backupsRemote.data, 'backups')
+  const funcionesCorreos = unwrap(correosRemote.data, 'funciones')
 
   async function reloadAll() {
-    resumenRemote.reload(); clinicsRemote.reload(); usersRemote.reload(); backupsRemote.reload()
+    resumenRemote.reload(); clinicsRemote.reload(); usersRemote.reload(); backupsRemote.reload(); correosRemote.reload()
   }
 
   function formatBytes(bytes) {
@@ -143,6 +146,22 @@ export default function AdminPanel() {
     } catch (error) { setMessage(error.message) } finally { setSaving(false) }
   }
 
+  async function setCorreosFuncion(clinicId, dias) {
+    setBusyCorreos(clinicId)
+    try {
+      const result = await api(`/admin/consultorios/${clinicId}/funciones/correos`, { method: 'POST', body: { dias } })
+      setMessage(result.mensaje); reloadAll()
+    } catch (error) { setMessage(error.message) } finally { setBusyCorreos(null) }
+  }
+
+  async function desactivarCorreosFuncion(clinicId) {
+    setBusyCorreos(clinicId)
+    try {
+      const result = await api(`/admin/consultorios/${clinicId}/funciones/correos/desactivar`, { method: 'POST' })
+      setMessage(result.mensaje); reloadAll()
+    } catch (error) { setMessage(error.message) } finally { setBusyCorreos(null) }
+  }
+
   return <>
     <PageHeader eyebrow="SUPERADMINISTRACIÓN" title="Centro de control" description="Invita consultorios nuevos, supervisa actividad, exporta datos y reinicia consultorios cuando lo necesites." />
     <section className="metrics-grid admin-metrics">
@@ -231,6 +250,24 @@ export default function AdminPanel() {
           </article>
         ))}</div>
       })() : <EmptyState icon="download" title="Elige una clínica" text="Selecciona un consultorio para ver sus copias de seguridad." />}
+    </section>
+
+    <section className="settings-card admin-correos-card">
+      <div className="settings-card-head"><span><Icon name="email" /></span><div><h2>Correos automáticos por consultorio</h2><p>Sin activación, los avisos automáticos (confirmaciones, recordatorios y cotizaciones) quedan pausados. Activa una prueba de 30 días o la activación definitiva.</p></div></div>
+      {funcionesCorreos.length ? <div className="admin-list">{funcionesCorreos.map((item) => (
+        <article key={item.consultorio_id}>
+          <div>
+            <strong>{item.nombre}</strong>
+            <small>{item.activo ? (item.dias_restantes !== null ? `Prueba activa: ${item.dias_restantes} días restantes (hasta ${formatDate(item.vence_en)})` : 'Correos automáticos activados sin vencimiento') : (item.vence_en ? `Prueba terminada (venció el ${formatDate(item.vence_en)})` : 'Sin activación: correos automáticos pausados')}</small>
+          </div>
+          <StatusPill status={item.activo ? 'Activo' : 'Pausado'} />
+          <div className="row-actions">
+            {!item.activo && <button onClick={() => setCorreosFuncion(item.consultorio_id, 30)} disabled={busyCorreos === item.consultorio_id} title="Prueba de 30 días"><Icon name="clock" /></button>}
+            {!item.activo && <button onClick={() => setCorreosFuncion(item.consultorio_id, null)} disabled={busyCorreos === item.consultorio_id} title="Activar sin vencimiento"><Icon name="check" /></button>}
+            {item.activo && <button onClick={() => desactivarCorreosFuncion(item.consultorio_id)} disabled={busyCorreos === item.consultorio_id} title="Desactivar correos automáticos"><Icon name="close" /></button>}
+          </div>
+        </article>
+      ))}</div> : <EmptyState icon="email" title="Sin consultorios" text="No hay consultorios registrados." />}
     </section>
 
     {detail && (

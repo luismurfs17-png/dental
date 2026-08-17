@@ -47,21 +47,22 @@
 ## 3. SIGUIENTE EN LA COLA (acordado con el usuario)
 
 ### 3.1 Personalización del consultorio
-- **Eslogan por clínica** → campo nuevo (`eslogan` en `consultorios` + `clinicJson` + UI en Settings), aparece en: portada del portal público (`Login.jsx` branded `/c/slug` — hoy el texto es fijo "Tu clínica, siempre contigo."), pantalla de login y pie de correos con marca.
-- **WhatsApp en correos** → enlace `wa.me` con el número de la clínica en el pie de plantillas (campo teléfono existente o campo nuevo `whatsapp`).
+- ✅ **Eslogan por clínica** (17/08/2026): campo `eslogan` en `consultorios` + `clinicJson` + UI en Settings ("Estudio de marca"), aparece en la portada del portal público (`Login.jsx` branded `/c/slug`), pantalla de login y pie de correos con marca.
+- ✅ **WhatsApp en correos** (17/08/2026): enlace `wa.me` con el número de la clínica en el pie de plantillas (campo `whatsapp`).
 
 ### 3.2 Alcances de correo de mayor valor
-- **Segundo recordatorio** (T-2h además del T-24h en `reminders.js`).
-- **Resumen semanal al doctor** (citas, pagos QR por verificar, saldos, pacientes inactivos).
+- ✅ **Segundo recordatorio T-2h** (17/08/2026): columna `tipo` (`24h`|`2h`) en `email_recordatorios`; cron separado `REMINDER_CRON_2H` (default `*/15 * * * *`) además del horario de 24h; `dueReminderRows(now, tipo)` y `sendReminderEmail(id, tipo)` registran `recordatorio_2h` en el historial.
+- ✅ **Resumen semanal al doctor** (17/08/2026): `server/src/weekly.js` + `sendWeeklySummaryEmail` (citas próximas 7 días, citas atendidas, pagos por verificar, pacientes con saldo y su monto, inactivos +30 días), cron `RESUMEN_SEMANAL_CRON` (default lunes 08:00), va a todos los doctores activos de la clínica. Test dedicado.
+- ✅ **Prueba de correos por clínica `funciones_consultorio`** (17/08/2026): ver sección 4. Implementado completo: tabla, migración, activación/desactivación desde el panel admin, corte automático en el cron de recordatorios + verificación en `sendEmail` antes de cada envío (todos los automáticos; citas y calendario intactos), banner de estado en Ajustes → Correos.
 - (Opcionales posteriores): recordatorio manual de saldo desde Cobros, correo de cotización con enlace público (`compartido_en`), seguimiento post-consulta con encuesta, botón "Confirmar asistencia" (tokens firmados + endpoints públicos), recuperación de pacientes inactivos, alerta de agenda llena.
 
 ### 3.3 Menores
 - ✅ **Backup por consultorio** (17/08/2026): cron diario genera ZIP por clínica en `/app/data/backups/consultorios/consultorio-<id>/` (retención 3 por clínica, `BACKUP_POR_CONSULTORIO` default `true`); el superadmin lista y descarga desde el panel (`GET /api/admin/backups`). Lógica extraída a `server/src/exporter.js`.
-- Página pública `/privacidad` (política de privacidad) — Google Cloud la pide para publicar (aquí no fue bloqueante) y da confianza a invitados.
+- ✅ **Página pública `/privacidad`** (17/08/2026): ruta React fuera de autenticación (`client/src/pages/public/Privacy.jsx`), enlace en el pie del login (`privacy-note`), estilos `.privacy-*`.
 - Google Cloud: **quitar la URI OAuth del dominio viejo** `sonrident` (ya aprobado, app publicada).
 - Dokploy: **desactivar Auto Deploy** (Settings → General → toggle) para que el usuario decida cuándo desplegar (está en el panel; el usuario lo revisará).
 - Search Console: revisar aviso "sitio peligroso".
-- Backup externo en Dokploy (destino pendiente).
+- ✅ **Backup externo en Dokploy** — pasos: ver DEPLOYMENT_RUNBOOK.md sección "Backup externo (Volume Backups)" (destino S3/B2 requiere credenciales del usuario).
 
 ### 3.4 Otros temas discutidos (decisión pendiente del usuario)
 - **Modo demo** ("Probar la app" sin cuenta): clínica demo + sesión invitado tipo login de desarrollo, pero activado solo para la clínica demo. Recomendado junto con la publicación de la app.
@@ -69,9 +70,9 @@
 
 ---
 
-## 4. DISEÑO APROBADO (SIN PROGRAMAR): PRUEBA DE CORREOS POR CLÍNICA
+## 4. DISEÑO APROBADO (YA PROGRAMADO 17/08/2026): PRUEBA DE CORREOS POR CLÍNICA
 
-**Contexto del negocio:** el superadmin quiere **vender estas mejoras**. Un cliente pidió solo "citas y calendario". Plan: habilitarle los recordatorios por correo como **prueba de 1 mes**, ver cómo funciona y luego **sumarlo al precio total**. Requisito clave: **desactivación automática al vencer** sin intervención manual.
+**Contexto del negocio:** el superadmin quiere **vender estas mejoras**. Un cliente pidió solo "citas y calendario". Plan: habilitarle los recordatorios por correo como **prueba de 1 mes**, ver cómo funciona y luego **sumarlo al precio total**. Requisito clave: **desactivación automática al vencer** sin intervención manual. **Decisión tomada**: el corte apaga TODOS los automáticos de la clínica (confirmaciones, recordatorios, cotizaciones, bienvenidas, resumen semanal); citas y calendario nunca se tocan.
 
 ### 4.1 Base de datos — tabla nueva `funciones_consultorio`
 ```

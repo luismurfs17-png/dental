@@ -236,10 +236,23 @@ CREATE TABLE IF NOT EXISTS email_recordatorios (
   consultorio_id INTEGER NOT NULL REFERENCES consultorios(id),
   cita_id INTEGER NOT NULL REFERENCES citas(id),
   destinatario TEXT NOT NULL,
+  tipo TEXT NOT NULL DEFAULT '24h',
   estado TEXT NOT NULL CHECK (estado IN ('enviado','error')),
   error TEXT,
   creado_en TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
   UNIQUE(consultorio_id, cita_id, destinatario)
+);
+
+CREATE TABLE IF NOT EXISTS funciones_consultorio (
+  id INTEGER PRIMARY KEY,
+  consultorio_id INTEGER NOT NULL REFERENCES consultorios(id),
+  funcion TEXT NOT NULL,
+  activo INTEGER NOT NULL DEFAULT 0 CHECK (activo IN (0,1)),
+  vence_en TEXT,
+  creado_por INTEGER REFERENCES usuarios(id),
+  creado_en TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  actualizado_en TEXT,
+  UNIQUE(consultorio_id, funcion)
 );
 
 CREATE TABLE IF NOT EXISTS admin_auditoria (

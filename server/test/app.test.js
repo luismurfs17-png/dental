@@ -1163,3 +1163,103 @@ test('pago parcial contra cotización queda en historial con total, a cuenta y s
 
   await doctor.delete(`/api/presupuestos/${quoteId}`).expect(200);
 });
+
+test('recordatorio 2h: entra solo dentro de las 2 horas previas a la cita', () => {
+  const clinicId = fixture.clinicId;
+  const patientId = Number(db.prepare(`INSERT INTO pacientes (consultorio_id,codigo,nombres,apellidos,email)
+    VALUES (?,?,?,?,?)`).run(clinicId, `10${Date.now()}`, 'Recordatorio', 'DosHoras', `rec2h-${Date.now()}@test.local`).lastInsertRowid);
+  db.prepare(`UPDATE consultorios SET recordatorio_horas=1 WHERE id=?`).run(clinicId);
+  db.prepare(`DELETE FROM email_recordatorios WHERE cita_id IN (SELECT id FROM citas WHERE motivo='REMINDER-2H')`).run();
+  db.prepare(`DELETE FROM citas WHERE consultorio_id=? AND motivo='REMINDER-2H'`).run(clinicId);
+  const now = Date.now();
+  const insertCita = db.prepare(`INSERT INTO citas (consultorio_id,paciente_id,doctor_id,servicio_id,inicio,fin,estado,motivo,creado_por)
+    VALUES (?,?,?,?,?,?,'confirmada','REMINDER-2H',?)`);
+  const cercana = Number(insertCita.run(clinicId, patientId, fixture.doctorId, fixture.serviceId,
+    new Date(now + 90 * 60000).toISOString(), new Date(now + 120 * 60000).toISOString(), fixture.doctorId).lastInsertRowid);
+  const lejana = Number(insertCita.run(clinicId, patientId, fixture.doctorId, fixture.serviceId,
+    new Date(now + 5 * 3600000).toISOString(), new Date(now + 5.5 * 3600000).toISOString(), fixture.doctorId).lastInsertRowid);
+  try {
+    const tipo24 = dueReminderRows(new Date(now)).map((row) => row.id);
+    const tipo2h = dueReminderRows(new Date(now), '2h').map((row) => row.id);
+    assert.ok(!tipo24.includes(cercana), 'con recordatorio_horas=1 la cita a 90 min no entra en la ventana de 24h');
+    assert.ok(!tipo24.includes(lejana), 'la cita lejana no entra en la ventana de 24h');
+    assert.ok(tipo2h.includes(cercana), 'la cita a 90 min entra en el recordatorio 2h');
+    assert.ok(!tipo2h.includes(lejana), 'la cita a 5 horas NO entra en el recordatorio 2h');
+  } finally {
+    db.prepare(`UPDATE consultorios SET recordatorio_horas=NULL WHERE id=?`).run(clinicId);
+    db.prepare(`DELETE FROM citas WHERE id IN (?,?)`).run(cercana, lejana);
+    db.prepare('DELETE FROM pacientes WHERE id=?').run(patientId);
+  }
+});
+
+test('funciones_consultorio: la activación de correos la controla el superadmin y corta al vencer', async () => {
+  const { correosFuncionActiva } = await import('../src/email.js');
+  const { expireFunctionTrials } = await import('../src/reminders.js');
+  const clinicId = fixture.clinicId;
+  db.prepare(`DELETE FROM funciones_consultorio WHERE consultorio_id=? AND funcion='correos_automaticos'`).run(clinicId);
+
+  assert.equal(correosFuncionActiva(clinicId), false, 'sin activación los correos automáticos están pausados');
+
+  const admin = request.agent(app);
+  await admin.post('/api/auth/desarrollo').send({ email: 'admin@test.local' }).expect(200);
+  const doctor = request.agent(app);
+  await doctor.post('/api/auth/desarrollo').send({ email: 'integration-doctor@test.local' }).expect(200);
+
+  const activar = await admin.post(`/api/admin/consultorios/${clinicId}/funciones/correos`).send({ dias: 30 }).expect(200);
+  assert.equal(activar.body.prueba.activo, 1);
+  assert.equal(correosFuncionActiva(clinicId), true, 'prueba activa habilita los correos');
+
+  const listado = await admin.get('/api/admin/funciones/correos').expect(200);
+  const entry = listado.body.funciones.find((item) => item.consultorio_id === clinicId);
+  assert.equal(entry.activo, true);
+  assert.equal(entry.dias_restantes, 30);
+
+  const configuracion = await doctor.get('/api/correo/configuracion').expect(200);
+  assert.equal(configuracion.body.configuracion.prueba.activo, true);
+  assert.equal(configuracion.body.configuracion.prueba.dias_restantes, 30);
+
+  await admin.post(`/api/admin/consultorios/${clinicId}/funciones/correos/desactivar`).expect(200);
+  assert.equal(correosFuncionActiva(clinicId), false, 'desactivar pausa los correos');
+
+  const vencida = new Date(Date.now() - 60000).toISOString();
+  db.prepare(`UPDATE funciones_consultorio SET activo=1, vence_en=? WHERE consultorio_id=? AND funcion='correos_automaticos'`).run(vencida, clinicId);
+  assert.equal(correosFuncionActiva(clinicId), false, 'una prueba vencida no habilita correos');
+  const cortadas = expireFunctionTrials();
+  assert.ok(cortadas >= 1, 'el corte automático desactiva la prueba vencida');
+  const row = db.prepare(`SELECT activo FROM funciones_consultorio WHERE consultorio_id=? AND funcion='correos_automaticos'`).get(clinicId);
+  assert.equal(row.activo, 0);
+
+  const sinVencer = await admin.post(`/api/admin/consultorios/${clinicId}/funciones/correos`).send({ dias: null }).expect(200);
+  assert.equal(sinVencer.body.prueba.vence_en, null, 'activación sin vencimiento para pago');
+  assert.equal(correosFuncionActiva(clinicId), true);
+
+  db.prepare(`DELETE FROM funciones_consultorio WHERE consultorio_id=? AND funcion='correos_automaticos'`).run(clinicId);
+});
+
+test('resumen semanal: cuenta citas, pagos por verificar, saldos e inactivos', async () => {
+  const { weeklySummaryData } = await import('../src/email.js');
+  const clinicId = fixture.clinicId;
+  const patientId = Number(db.prepare(`INSERT INTO pacientes (consultorio_id,codigo,nombres,apellidos,email)
+    VALUES (?,?,?,?,?)`).run(clinicId, `11${Date.now()}`, 'Resumen', 'Semanal', `resumen-${Date.now()}@test.local`).lastInsertRowid);
+  const now = Date.now();
+  db.prepare(`INSERT INTO citas (consultorio_id,paciente_id,doctor_id,servicio_id,inicio,fin,estado,motivo,creado_por)
+    VALUES (?,?,?,?,?,?,?,'RESUMEN-TEST',?)`).run(clinicId, patientId, fixture.doctorId, fixture.serviceId,
+    new Date(now + 86400000).toISOString(), new Date(now + 90000000).toISOString(), 'confirmada', fixture.doctorId);
+  db.prepare(`INSERT INTO citas (consultorio_id,paciente_id,doctor_id,servicio_id,inicio,fin,estado,motivo,creado_por)
+    VALUES (?,?,?,?,?,?,?,'RESUMEN-TEST',?)`).run(clinicId, patientId, fixture.doctorId, fixture.serviceId,
+    new Date(now - 86400000).toISOString(), new Date(now - 82800000).toISOString(), 'atendida', fixture.doctorId);
+  db.prepare(`INSERT INTO pagos (consultorio_id,paciente_id,monto_bs,metodo,estado,registrado_por)
+    VALUES (?,?,?,?,?,?)`).run(clinicId, patientId, 50, 'qr', 'por_verificar', fixture.doctorId);
+  try {
+    const data = weeklySummaryData(clinicId);
+    assert.ok(data.citasProximas >= 1, 'cuenta la cita confirmada futura');
+    assert.ok(data.citasAtendidas >= 1, 'cuenta la cita atendida de la semana');
+    assert.ok(data.pagosPorVerificar >= 1, 'cuenta el pago pendiente por verificar');
+    assert.ok(data.pacientesInactivos >= 1, 'cuenta pacientes sin cita en 30 días');
+    assert.equal(typeof data.saldoBs, 'number');
+  } finally {
+    db.prepare(`DELETE FROM pagos WHERE consultorio_id=? AND paciente_id=?`).run(clinicId, patientId);
+    db.prepare(`DELETE FROM citas WHERE consultorio_id=? AND paciente_id=?`).run(clinicId, patientId);
+    db.prepare('DELETE FROM pacientes WHERE id=?').run(patientId);
+  }
+});

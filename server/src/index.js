@@ -4,12 +4,14 @@ import { db } from './db.js';
 import { startReminders } from './reminders.js';
 import { startBackups } from './backup.js';
 import { startMaintenance } from './maintenance.js';
+import { startWeeklySummary } from './weekly.js';
 
 const server = app.listen(config.port, '0.0.0.0', () => {
   console.log(`Servidor dental escuchando en 0.0.0.0:${config.port}`);
   startReminders();
   startBackups();
   startMaintenance();
+  startWeeklySummary();
 });
 
 function shutdown(signal) {

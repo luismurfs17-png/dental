@@ -12,18 +12,11 @@ function anyEmailConfigured() {
     ) LIMIT 1`).get());
 }
 
-export function dueReminderRows(now = new Date()) {
+export function dueReminderRows(now = new Date(), tipo = '24h') {
   const nowIso = now.toISOString();
-  return db.prepare(`SELECT c.id, c.consultorio_id, p.email
-    FROM citas c
-    JOIN pacientes p ON p.id = c.paciente_id AND p.consultorio_id = c.consultorio_id
-    JOIN consultorios co ON co.id = c.consultorio_id AND co.eliminado_en IS NULL
-    LEFT JOIN email_recordatorios er ON er.cita_id = c.id AND er.consultorio_id = c.consultorio_id
-      AND er.destinatario = p.email AND er.estado = 'enviado'
-    WHERE c.estado = 'confirmada' AND c.eliminado_en IS NULL AND p.eliminado_en IS NULL
-      AND p.email IS NOT NULL AND p.recordatorios_activos = 1 AND er.id IS NULL
-      AND datetime(c.inicio) > datetime(?)
-      AND (
+  const windowSql = tipo === '2h'
+    ? `AND datetime(c.inicio) <= datetime(?, '+2 hours')`
+    : `AND (
         (co.recordatorio_horas IS NULL AND datetime(?) >= CASE
           WHEN strftime('%H', c.inicio) >= '16' THEN datetime(date(c.inicio) || ' 12:00:00')
           ELSE datetime(date(c.inicio) || ' 00:00:00')
@@ -31,7 +24,48 @@ export function dueReminderRows(now = new Date()) {
         OR
         (co.recordatorio_horas IS NOT NULL
           AND datetime(c.inicio) <= datetime(?, '+' || co.recordatorio_horas || ' hours'))
-      )`).all(nowIso, nowIso, nowIso);
+      )`;
+  const params = tipo === '2h' ? [nowIso, nowIso] : [nowIso, nowIso, nowIso];
+  return db.prepare(`SELECT c.id, c.consultorio_id, p.email
+    FROM citas c
+    JOIN pacientes p ON p.id = c.paciente_id AND p.consultorio_id = c.consultorio_id
+    JOIN consultorios co ON co.id = c.consultorio_id AND co.eliminado_en IS NULL
+    LEFT JOIN email_recordatorios er ON er.cita_id = c.id AND er.consultorio_id = c.consultorio_id
+      AND er.destinatario = p.email AND er.tipo = ? AND er.estado = 'enviado'
+    WHERE c.estado = 'confirmada' AND c.eliminado_en IS NULL AND p.eliminado_en IS NULL
+      AND p.email IS NOT NULL AND p.recordatorios_activos = 1 AND er.id IS NULL
+      AND datetime(c.inicio) > datetime(?)
+      ${windowSql}`).all(tipo, ...params);
+}
+
+export function expireFunctionTrials(now = new Date()) {
+  const cutoff = now.toISOString();
+  const result = db.prepare(`UPDATE funciones_consultorio SET activo=0, actualizado_en=CURRENT_TIMESTAMP
+    WHERE activo=1 AND funcion='correos_automaticos' AND vence_en IS NOT NULL AND vence_en <= ?`).run(cutoff);
+  if (result.changes > 0) {
+    console.log(`Pruebas de correos automáticos vencidas: ${result.changes}`);
+  }
+  return result.changes;
+}
+
+function recordReminder(row, tipo, error = null) {
+  db.prepare(`INSERT INTO email_recordatorios
+    (consultorio_id, cita_id, destinatario, tipo, estado, error) VALUES (?, ?, ?, ?, ?, ?)
+    ON CONFLICT(consultorio_id, cita_id, destinatario) DO UPDATE SET
+      tipo=excluded.tipo, estado=excluded.estado, error=excluded.error, creado_en=CURRENT_TIMESTAMP`)
+    .run(row.consultorio_id, row.id, row.email, tipo, error ? 'error' : 'enviado', error);
+}
+
+async function runReminders(tipo) {
+  const rows = dueReminderRows(new Date(), tipo);
+  for (const row of rows) {
+    try {
+      const sent = await sendReminderEmail(row.id, tipo);
+      recordReminder(row, tipo, sent ? null : 'Correo no enviado: sin SMTP configurado para esta clínica');
+    } catch (error) {
+      recordReminder(row, tipo, String(error.message).slice(0, 500));
+    }
+  }
 }
 
 export function startReminders() {
@@ -39,32 +73,20 @@ export function startReminders() {
     console.log('Recordatorios por correo desactivados: sin SMTP global ni correos de consultorios configurados');
     return null;
   }
-  if (!cron.validate(config.smtp.cron)) {
-    console.error('Recordatorios por correo desactivados: expresión cron inválida');
-    return null;
-  }
-  return cron.schedule(config.smtp.cron, async () => {
-    const rows = dueReminderRows();
-    for (const row of rows) {
-      try {
-        const sent = await sendReminderEmail(row.id);
-        if (sent) {
-          db.prepare(`INSERT INTO email_recordatorios
-            (consultorio_id, cita_id, destinatario, estado, error) VALUES (?, ?, ?, 'enviado', NULL)
-            ON CONFLICT(consultorio_id, cita_id, destinatario) DO UPDATE SET estado='enviado', error=NULL, creado_en=CURRENT_TIMESTAMP`)
-            .run(row.consultorio_id, row.id, row.email);
-        } else {
-          db.prepare(`INSERT INTO email_recordatorios
-            (consultorio_id, cita_id, destinatario, estado, error) VALUES (?, ?, ?, 'error', ?)
-            ON CONFLICT(consultorio_id, cita_id, destinatario) DO UPDATE SET estado='error', error=excluded.error, creado_en=CURRENT_TIMESTAMP`)
-            .run(row.consultorio_id, row.id, row.email, 'Correo no enviado: sin SMTP configurado para esta clínica');
-        }
-      } catch (error) {
-        db.prepare(`INSERT INTO email_recordatorios
-          (consultorio_id, cita_id, destinatario, estado, error) VALUES (?, ?, ?, 'error', ?)
-          ON CONFLICT(consultorio_id, cita_id, destinatario) DO UPDATE SET estado='error', error=excluded.error, creado_en=CURRENT_TIMESTAMP`)
-          .run(row.consultorio_id, row.id, row.email, String(error.message).slice(0, 500));
-      }
+  const jobs = [];
+  const schedules = [
+    { expr: config.smtp.cron, tipo: '24h' },
+    { expr: config.smtp.cron2h, tipo: '2h' },
+  ];
+  for (const { expr, tipo } of schedules) {
+    if (!cron.validate(expr)) {
+      console.error(`Recordatorios ${tipo} desactivados: expresión cron inválida`);
+      continue;
     }
-  });
+    jobs.push(cron.schedule(expr, async () => {
+      expireFunctionTrials();
+      await runReminders(tipo);
+    }));
+  }
+  return jobs;
 }

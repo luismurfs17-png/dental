@@ -168,11 +168,30 @@ y `/api/admin/backups/consultorio-<id>/<archivo>`). Se conservan los
   (`0 3 * * *`), `BACKUP_RETENTION_LOCAL` (3 snapshots, eliminando los viejos),
   `BACKUP_POR_CONSULTORIO` (`true` por defecto; `false` para desactivarlo).
 - Mantener la retención local pequeña: la copia duradera es el backup externo
-  (Restic→S3) que programa Dokploy sobre el volumen. Probar la restauración
+  que programa Dokploy sobre el volumen. Probar la restauración
   reemplazando `/app/data/dentista.sqlite` y `uploads/` y reiniciando el
   contenedor mientras la app está detenida.
 - Regla de escalabilidad: migrar de SQLite solo si se superan ~60–80 clínicas,
   los backups superan los 2–3 GB o la restauración excede 1 h.
+
+## Backup externo (Volume Backups en Dokploy) — pasos para el usuario
+
+1. **Preparar el destino**: el plan de Dokploy debe incluir "Volume Backups".
+   Se admite S3 (AWS, Backblaze B2, Cloudflare R2, Wasabi…) o SFTP. Para B2:
+   crear un "bucket" privado (ej. `sonrident-backups`) y un "Application Key"
+   con permiso de lectura/escritura sobre ese bucket.
+2. En Dokploy: **Services → sonrident (app) → Volumes → Volume Backups →
+   + Add Backup**.
+3. Elegir el volumen `sonrident_data` (monta `/app/data`, donde están
+   `dentista.sqlite`, `uploads/` y `backups/`).
+4. Seleccionar destino S3 o SFTP y rellenar endpoint/credenciales.
+5. Programar frecuencia: **diario** (o cada 12 h si hay mucho movimiento).
+6. **Retención**: conservar mínimo 14 días en el destino.
+7. Guardar y pulsar **Run now** una vez para validar que la copia se sube.
+8. **Probar la restauración** (imprescindible): desde Dokploy crear un
+   volumen temporal desde el backup y arrancar una instancia efímera con
+   `DATA_DIR` apuntando a ese volumen, o al menos descargar el backup y
+   abrir `dentista.sqlite` localmente para confirmar integridad.
 
 ## Reinicio a cero de un consultorio (superadmin)
 

@@ -336,4 +336,59 @@ router.delete('/consultorios/:id', (req, res) => {
   res.json({ mensaje: 'Consultorio eliminado; sus usuarios ya no podrán acceder' });
 });
 
+function correosPruebaRow(consultorioId) {
+  return db.prepare(`SELECT activo, vence_en, creado_en, actualizado_en FROM funciones_consultorio
+    WHERE consultorio_id=? AND funcion='correos_automaticos'`).get(consultorioId) || null;
+}
+
+router.get('/funciones/correos', (req, res) => {
+  const rows = db.prepare(`
+    SELECT c.id consultorio_id, c.nombre, c.marca_nombre,
+      f.activo, f.vence_en, f.creado_en, f.actualizado_en
+    FROM consultorios c
+    LEFT JOIN funciones_consultorio f ON f.consultorio_id = c.id AND f.funcion = 'correos_automaticos'
+    WHERE c.eliminado_en IS NULL ORDER BY c.nombre`).all();
+  res.json({ funciones: rows.map((row) => ({
+    consultorio_id: row.consultorio_id,
+    nombre: row.nombre,
+    marca_nombre: row.marca_nombre,
+    activo: Boolean(row.activo),
+    vence_en: row.vence_en || null,
+    dias_restantes: row.activo && row.vence_en
+      ? Math.max(0, Math.ceil((new Date(row.vence_en).getTime() - Date.now()) / 86400000))
+      : null
+  })) });
+});
+
+router.post('/consultorios/:id/funciones/correos', (req, res) => {
+  const clinic = clinicById(id(req.params.id));
+  if (!clinic) throw new ApiError(404, 'Consultorio no encontrado');
+  const dias = req.body.dias === null || req.body.dias === undefined
+    ? null
+    : id(String(req.body.dias));
+  if (dias !== null && dias > 365) throw new ApiError(400, 'El período máximo de activación es 365 días');
+  const venceEn = dias === null ? null : new Date(Date.now() + dias * 86400000).toISOString();
+  const existing = correosPruebaRow(clinic.id);
+  if (existing) {
+    db.prepare(`UPDATE funciones_consultorio SET activo=1, vence_en=?, actualizado_en=CURRENT_TIMESTAMP
+      WHERE consultorio_id=? AND funcion='correos_automaticos'`).run(venceEn, clinic.id);
+  } else {
+    db.prepare(`INSERT INTO funciones_consultorio (consultorio_id, funcion, activo, vence_en, creado_por)
+      VALUES (?, 'correos_automaticos', 1, ?, ?)`).run(clinic.id, venceEn, req.user.id);
+  }
+  adminLog(req.user, 'activar_funcion', 'consultorio', clinic.id, { funcion: 'correos_automaticos', dias, vence_en: venceEn }, req.ip);
+  res.json({ mensaje: dias === null
+    ? 'Correos automáticos activados sin vencimiento'
+    : `Correos automáticos activados por ${dias} días`, prueba: correosPruebaRow(clinic.id) });
+});
+
+router.post('/consultorios/:id/funciones/correos/desactivar', (req, res) => {
+  const clinic = clinicById(id(req.params.id));
+  if (!clinic) throw new ApiError(404, 'Consultorio no encontrado');
+  db.prepare(`UPDATE funciones_consultorio SET activo=0, actualizado_en=CURRENT_TIMESTAMP
+    WHERE consultorio_id=? AND funcion='correos_automaticos'`).run(clinic.id);
+  adminLog(req.user, 'desactivar_funcion', 'consultorio', clinic.id, { funcion: 'correos_automaticos' }, req.ip);
+  res.json({ mensaje: 'Correos automáticos desactivados para este consultorio' });
+});
+
 export default router;

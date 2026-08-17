@@ -26,6 +26,8 @@ export const config = {
     pass: process.env.SMTP_PASS || '',
     from: process.env.SMTP_FROM || 'Portal Clínico <no-reply@example.com>',
     cron: process.env.REMINDER_CRON || '0 * * * *',
+    cron2h: process.env.REMINDER_CRON_2H || '*/15 * * * *',
+    weeklyCron: process.env.RESUMEN_SEMANAL_CRON || '0 8 * * 1',
     hours: Number(process.env.REMINDER_HOURS || 24)
   },
   get adminEmails() {

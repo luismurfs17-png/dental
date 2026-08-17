@@ -81,6 +81,7 @@ ensureColumn('consultorio_email', 'gmail_access_token_cifrado', 'TEXT');
 ensureColumn('consultorio_email', 'gmail_access_token_expira_en', 'TEXT');
 ensureColumn('consultorios', 'recordatorio_horas', 'INTEGER');
 ensureColumn('consultorios', 'eslogan', 'TEXT');
+ensureColumn('email_recordatorios', 'tipo', "TEXT NOT NULL DEFAULT '24h'");
 ensureColumn('consultorios', 'tipografia', "TEXT NOT NULL DEFAULT 'fraunces'");
 ensureColumn('consultorios', 'fondo_estilo', "TEXT NOT NULL DEFAULT 'imagen'");
 ensureColumn('consultorios', 'bienvenida', 'TEXT');
