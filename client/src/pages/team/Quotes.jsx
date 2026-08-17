@@ -170,7 +170,7 @@ export function QuoteEditor({ patient, quote, initialPatientId = '', onClose, on
               <div className="quote-extras">
                 {item.detalle.map((part, index) => (
                   <div className="quote-extra-row" key={index}>
-                    <input value={part.nombre} onChange={(event) => setDetail(item.uid, index, { nombre: event.target.value })} placeholder="Partida (ej. Fierros, placa, material…)" />
+                    <input value={part.nombre} onChange={(event) => setDetail(item.uid, index, { nombre: event.target.value })} placeholder="Complemento del servicio" />
                     <input type="number" min="0" step="0.01" value={part.precio_bs} onChange={(event) => setDetail(item.uid, index, { precio_bs: event.target.value })} placeholder="Bs" inputMode="decimal" aria-label="Precio de la partida" />
                     <button type="button" className="icon-button danger" onClick={() => removeDetail(item.uid, index)} aria-label="Quitar partida" title="Quitar partida"><Icon name="trash" size={13} /></button>
                   </div>
