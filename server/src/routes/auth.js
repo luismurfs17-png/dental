@@ -76,7 +76,13 @@ export function findOrCreateGoogleUser(profile, clinicSlug = '') {
     ORDER BY CASE WHEN google_sub=? THEN 0 ELSE 1 END, id LIMIT 1`)
     .get(targetClinic.id, profile.sub, email, profile.sub) : null;
   if (targetClinic && !user) {
-    throw new ApiError(403, 'Este correo no tiene acceso autorizado a la clínica seleccionada');
+    user = db.prepare(`SELECT * FROM usuarios
+      WHERE email = ? COLLATE NOCASE AND rol = 'doctor' AND consultorio_id IS NULL
+        AND estado IN ('preautorizado','activo') AND eliminado_en IS NULL
+      ORDER BY id LIMIT 1`).get(email);
+    if (!user) {
+      throw new ApiError(403, 'Este correo no tiene acceso autorizado a la clínica seleccionada');
+    }
   }
   if (!user) user = db.prepare(`SELECT * FROM usuarios WHERE google_sub = ? ORDER BY
     CASE WHEN eliminado_en IS NULL THEN 0 ELSE 1 END, id LIMIT 1`).get(profile.sub);
@@ -182,8 +188,9 @@ router.get('/google/callback', asyncRoute(async (req, res) => {
     const user = findOrCreateGoogleUser(ticket.getPayload(), clinicSlug);
     issueSession(res, user);
     console.log(`OAuth OK: id=${user.id}, admin=${Boolean(user.es_admin)}, estado=${user.estado}`);
-    const suffix = clinicSlug ? `?clinica=${encodeURIComponent(clinicSlug)}` : '';
-    const successPath = clinicSlug ? `/c/${clinicSlug}/auth/success` : '/auth/success';
+    const isClinicMember = Boolean(clinicSlug && user.consultorio_id);
+    const suffix = isClinicMember ? `?clinica=${encodeURIComponent(clinicSlug)}` : '';
+    const successPath = isClinicMember ? `/c/${clinicSlug}/auth/success` : '/auth/success';
     return res.redirect(303, `${config.clientUrl}${successPath}${suffix}`);
   } catch (error) {
     console.error('OAuth callback error:', error?.message || error);

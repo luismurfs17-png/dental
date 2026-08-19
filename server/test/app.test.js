@@ -784,6 +784,41 @@ test('el acceso marcado selecciona la membresía de la clínica correcta', async
   assert.equal(selectedPatient.rol, 'paciente');
 });
 
+test('un invitado sin consultorio puede entrar desde un portal de clínica y queda listo para crearlo', async (t) => {
+  const { findOrCreateGoogleUser } = await import('../src/routes/auth.js');
+  const stamp = `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+  const email = `invitada-${stamp}@test.local`;
+  const user = Number(db.prepare(`INSERT INTO usuarios (email,nombre,rol,estado)
+    VALUES (?,?,'doctor','preautorizado')`).run(email, 'Doctora Invitada').lastInsertRowid);
+  t.after(() => db.prepare('DELETE FROM usuarios WHERE id=?').run(user));
+  const profile = { sub: `sub-invitada-${stamp}`, email, email_verified: true, name: 'Doctora Invitada' };
+
+  const viaClinic = findOrCreateGoogleUser(profile, fixture.clinicSlug);
+  assert.equal(viaClinic.id, user);
+  assert.equal(viaClinic.consultorio_id, null);
+  assert.equal(viaClinic.estado, 'activo');
+  assert.equal(viaClinic.rol, 'doctor');
+  const bound = db.prepare('SELECT google_sub, estado FROM usuarios WHERE id=?').get(user);
+  assert.equal(bound.google_sub, `sub-invitada-${stamp}`);
+  assert.equal(bound.estado, 'activo');
+
+  const secondLogin = findOrCreateGoogleUser(profile, fixture.clinicSlug);
+  assert.equal(secondLogin.id, user);
+  assert.equal(secondLogin.consultorio_id, null);
+});
+
+test('un no invitado sin consultorio sigue siendo rechazado en un portal de clínica', async (t) => {
+  const { findOrCreateGoogleUser } = await import('../src/routes/auth.js');
+  const stamp = `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+  const email = `pendiente-${stamp}@test.local`;
+  const user = Number(db.prepare(`INSERT INTO usuarios (email,nombre,rol,estado)
+    VALUES (?,?,'doctor','pendiente')`).run(email, 'Doctora Pendiente').lastInsertRowid);
+  t.after(() => db.prepare('DELETE FROM usuarios WHERE id=?').run(user));
+  assert.throws(() => findOrCreateGoogleUser({
+    sub: `sub-pendiente-${stamp}`, email, email_verified: true, name: 'Doctora Pendiente'
+  }, fixture.clinicSlug), /no tiene acceso autorizado/i);
+});
+
 test('cotizaciones: servicios del catálogo con o sin precio, edición y aislamiento por consultorio', async () => {
   const doctor = request.agent(app);
   await doctor.post('/api/auth/desarrollo').send({ email: 'integration-doctor@test.local' }).expect(200);
